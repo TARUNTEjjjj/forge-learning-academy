@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="How Forge's browser learning edition stores your progress, drafts, and project files.">
+  <title>Your data & privacy · Forge</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <style>
+    :root{color-scheme:dark;--paper:#0B1020;--surface:#121A2D;--raised:#19243A;--ink:#F5F3EB;--muted:#A6AFC1;--lime:#FF6478;--violet:#A99BFF;--line:#2B3650}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(ellipse at 80% 0%,#211D3F 0,transparent 45%),var(--paper);color:var(--ink);font:16px/1.8 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:900px;margin:0 auto;padding:48px 32px 80px}a{color:var(--lime);text-underline-offset:5px;text-decoration-thickness:1px}a:hover{color:var(--ink)}a:focus-visible{outline:3px solid var(--lime);outline-offset:6px;border-radius:3px}.back{display:inline-flex;align-items:center;min-height:44px;font-size:13px;font-weight:650;margin-bottom:56px;letter-spacing:.1px}.eyebrow{text-transform:uppercase;letter-spacing:2px;font-size:10px;font-weight:750;color:var(--violet)}h1{font-size:clamp(38px,6.5vw,66px);line-height:1.06;letter-spacing:-2.4px;max-width:720px;margin:18px 0 28px;font-weight:750;text-wrap:balance}h2{font-size:22px;line-height:1.35;margin:0 0 18px;letter-spacing:-.6px;font-weight:650}p{margin:0 0 18px;color:var(--muted)}p:last-child{margin-bottom:0}.intro{font-size:18px;line-height:1.8;max-width:730px}.panel{margin-top:24px;padding:34px 36px;background:linear-gradient(135deg,var(--surface),#141C30);border:1px solid var(--line);border-radius:18px;box-shadow:0 14px 32px #03071326}.note{background:#291926;border:1px solid #633042;border-left:3px solid var(--lime);border-radius:0 12px 12px 0;padding:20px 24px;margin:32px 0 36px;color:#FFD8DE;font-size:14px;line-height:1.8}ul,ol{padding-left:23px;margin:14px 0;color:var(--muted)}li{margin:12px 0;padding-left:5px}li::marker{color:var(--violet)}strong{color:var(--ink);font-weight:650}code{font-size:.9em;background:var(--raised);color:var(--violet);border:1px solid var(--line);padding:3px 7px;border-radius:5px}footer{margin-top:42px;padding-top:24px;border-top:1px solid var(--line);color:var(--muted);font-size:12px;line-height:1.9}.brand{color:var(--ink);font-weight:800;font-size:25px;letter-spacing:-1.2px}.brand span{color:var(--lime)}@media(max-width:540px){main{padding:24px 19px 50px}.panel{padding:25px 22px;border-radius:14px}.back{margin-bottom:34px}.intro{font-size:16px}h1{letter-spacing:-1.5px}.note{padding:18px 20px;margin:26px 0 30px;font-size:13px}h2{font-size:20px}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  </style>
+</head>
+<body>
+<main>
+  <a class="back" href="/">← Back to your learning workspace</a>
+  <p class="eyebrow">The browser learning edition</p>
+  <h1>Your learning. Your files. Your browser.</h1>
+  <p class="intro">Forge saves your learning record on the browser and device you are using. This edition has no account sign-in and does not send your learning record to a Forge account or database.</p>
+  <div class="note">Keep an exported copy of work that matters to you. Clearing website data, changing browsers, or using private browsing can make saved work unavailable.</div>
+
+  <section class="panel" aria-labelledby="stored">
+    <h2 id="stored">What stays in this browser</h2>
+    <p>Forge uses browser storage, including <code>localStorage</code>, for your profile preferences, lesson notes and completion marks, study sessions, practice results, Python drafts, and project files. A competition timer may also use storage that belongs to its browser tab.</p>
+    <p>These records belong to this website address in this browser. They do not automatically follow you to another browser, device, or website address. People who use the same browser profile can see its saved learning record.</p>
+    <p>If storage is blocked or full, a save can fail. Pay attention to the storage notice and download your files before closing the page.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="copies">
+    <h2 id="copies">Keep a copy outside the website</h2>
+    <ul>
+      <li>In <strong>My progress</strong>, use <strong>Export my learning record</strong> to download a JSON copy of your saved record.</li>
+      <li>In <strong>Build & contribute</strong>, use <strong>Download project ZIP</strong> to save editable project files to your computer.</li>
+      <li>Keep downloads in a folder you can find again. They may contain your notes or source code, so review them before sharing.</li>
+    </ul>
+    <p>Project publishing happens through your own Git and GitHub tools. Forge's browser edition does not connect to your GitHub account or push commits for you.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="delete">
+    <h2 id="delete">Clear your learning data</h2>
+    <p>Open <strong>My progress</strong>, choose the delete-data action, and read its confirmation. This clears the active Forge learning record and its drafts in this browser. You can also remove this website's data in your browser settings.</p>
+    <p>Deleting website data does not delete files you downloaded, copies in another browser, or repositories you published on GitHub. Remove those separately if you no longer want them.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="outside">
+    <h2 id="outside">Requests outside your browser</h2>
+    <p>Your browser requests the website's HTML, styles, scripts, and curriculum from the hosting provider. Font files may load from Google Fonts. Python practice downloads the Pyodide runtime from the jsDelivr CDN, then runs your code in an isolated browser worker.</p>
+    <p>Documentation, contest judges, GitHub, and career resources open on their own websites. The hosting provider and these external services may process request information such as your IP address under their own policies. Their accounts and submissions are separate from Forge.</p>
+    <p>Keep passwords, access tokens, private customer data, and other sensitive information out of practice code, project files, and learning notes.</p>
+  </section>
+
+  <footer><span class="brand">forge<span>.</span></span> · Browser learning edition · Updated 30 October 2026</footer>
+</main>
+</body>
+</html>

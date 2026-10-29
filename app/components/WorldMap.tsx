@@ -1,0 +1,31 @@
+'use client';
+import {useRef,useEffect,useState} from 'react';
+import {Plus,Minus,RotateCcw,MoveUpRight} from 'lucide-react';
+type Phase={id:string;title:string;hours:number};
+const centers=[[-4,2],[-1,2.5],[2,2],[4,-.5],[1,-.7],[-2,-1],[-4,-3.5],[-1,-4],[2,-3.7],[4,-5.7]];
+const rgb=(hex:string,k:number)=>{const h=hex.replace('#','');return `rgb(${[0,2,4].map(i=>Math.round(parseInt(h.slice(i,i+2),16)*k)).join(',')})`};
+export default function WorldMap({phases,selected,onSelect,completed=[]}:{phases:Phase[];selected:number;onSelect:(i:number)=>void;completed?:string[]}){
+ const canvas=useRef<HTMLCanvasElement>(null),wrap=useRef<HTMLDivElement>(null);const [angle,setAngle]=useState(.23),[zoom,setZoom]=useState(1),[labels,setLabels]=useState<{x:number;y:number}[]>([]); const drag=useRef<{x:number;a:number;moved:boolean}|null>(null);
+ useEffect(()=>{let frame=0;const draw=()=>{const c=canvas.current,box=wrap.current;if(!c||!box)return;const w=box.clientWidth,h=box.clientHeight,dpr=Math.min(devicePixelRatio||1,2);c.width=w*dpr;c.height=h*dpr;const ctx=c.getContext('2d');if(!ctx)return;ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);const scale=Math.min(w/16.3,h/11)*zoom;const project=(x:number,y:number,z:number)=>{const rx=x*Math.cos(angle)-y*Math.sin(angle),ry=x*Math.sin(angle)+y*Math.cos(angle);return [w*.5+rx*scale,h*.48+ry*scale*.48-z*scale*.9]};
+ // A quiet night sky and a restrained glow keep the islands legible on the dark canvas.
+ const sky=ctx.createLinearGradient(0,0,w,h);sky.addColorStop(0,'#151D35');sky.addColorStop(.55,'#10172A');sky.addColorStop(1,'#0B1020');ctx.fillStyle=sky;ctx.fillRect(0,0,w,h);
+ const haze=ctx.createRadialGradient(w*.72,h*.18,0,w*.72,h*.18,w*.65);haze.addColorStop(0,'rgba(169,155,255,.12)');haze.addColorStop(1,'rgba(169,155,255,0)');ctx.fillStyle=haze;ctx.fillRect(0,0,w,h);
+ for(let i=0;i<36;i++){const sx=((i*137+31)%997)/997*w,sy=((i*i*67+19)%991)/991*h;ctx.fillStyle=i%4===0?'rgba(245,243,235,.38)':'rgba(166,175,193,.18)';ctx.beginPath();ctx.arc(sx,sy,i%4===0?1:.65,0,Math.PI*2);ctx.fill();}
+ const active=centers[selected];if(active){const [gx,gy]=project(active[0],active[1],0);const glow=ctx.createRadialGradient(gx,gy,0,gx,gy,scale*2.4);glow.addColorStop(0,'rgba(255,100,120,.14)');glow.addColorStop(1,'rgba(255,100,120,0)');ctx.fillStyle=glow;ctx.fillRect(0,0,w,h);}
+ centers.forEach(([x,y])=>{const p=project(x,y,-.3);ctx.fillStyle='rgba(3,7,18,.46)';ctx.beginPath();ctx.ellipse(p[0],p[1]+scale*.3,scale*1.17,scale*.44,0,0,Math.PI*2);ctx.fill();});
+ // Every tile is a projected cuboid. Depth sorting gives a small, real 3D world without a GPU dependency.
+ const tiles:{x:number;y:number;z:number;size:number;color:string;depth:number}[]=[];
+ centers.forEach(([x,y],i)=>{for(let a=-1;a<=1;a++)for(let b=-1;b<=1;b++){if(Math.abs(a)+Math.abs(b)===2&&((i+a+b)%3===0))continue;const z=.26+((i+a*a+b+20)%3)*.07;tiles.push({x:x+a*.59,y:y+b*.59,z,size:.6,color:i===selected?'#FF6478':i<selected||completed.includes(phases[i]?.id)?'#8CA6CF':i%2===0?'#847AB5':'#657EB2',depth:(x+a*.59)*Math.sin(angle)+(y+b*.59)*Math.cos(angle)});}tiles.push({x,y,z:1.02,size:.58,color:i===selected?'#FF6478':'#A99BFF',depth:x*Math.sin(angle)+y*Math.cos(angle)+.1});});
+ // Dotted path between islands.
+ ctx.strokeStyle='#68769E';ctx.lineWidth=1.7;ctx.setLineDash([3,7]);centers.forEach(([x,y],i)=>{if(i===centers.length-1)return;const a=project(x,y,0),b=project(centers[i+1][0],centers[i+1][1],0);ctx.beginPath();ctx.moveTo(...a as [number,number]);ctx.lineTo(...b as [number,number]);ctx.stroke()});ctx.setLineDash([]);
+ const poly=(pts:number[][],fill:string)=>{ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();ctx.fillStyle=fill;ctx.fill();};
+ tiles.sort((a,b)=>a.depth-b.depth).forEach(t=>{const {x,y,z,size:s,color}=t;const A=project(x-s/2,y-s/2,z),B=project(x+s/2,y-s/2,z),C=project(x+s/2,y+s/2,z),D=project(x-s/2,y+s/2,z);const a=project(x-s/2,y-s/2,-.26),b=project(x+s/2,y-s/2,-.26),c=project(x+s/2,y+s/2,-.26),d=project(x-s/2,y+s/2,-.26);poly([B,C,c,b],rgb(color,.43));poly([C,D,d,c],rgb(color,.64));poly([A,B,C,D],color);ctx.strokeStyle='rgba(245,243,235,.28)';ctx.lineWidth=.65;ctx.beginPath();ctx.moveTo(A[0],A[1]);ctx.lineTo(B[0],B[1]);ctx.lineTo(C[0],C[1]);ctx.stroke();});
+ centers.forEach(([x,y],i)=>{const p=project(x,y,1.02);ctx.strokeStyle=i===selected?'#F5F3EB':'#8F9CBF';ctx.lineWidth=1.8;ctx.beginPath();ctx.moveTo(p[0],p[1]);ctx.lineTo(p[0],p[1]-25);ctx.stroke();poly([[p[0],p[1]-25],[p[0]+19,p[1]-21],[p[0],p[1]-15]],i===selected?'#F84E64':'#A99BFF');});
+ setLabels(centers.map(([x,y])=>{const p=project(x,y,-.3);return {x:p[0],y:p[1]+16}}));};const ro=new ResizeObserver(()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(draw)});if(wrap.current)ro.observe(wrap.current);draw();return()=>{ro.disconnect();cancelAnimationFrame(frame)}},[angle,zoom,selected,completed.join(','),phases]);
+ return <div className="world-wrap" ref={wrap}>
+ <div className="map-atmosphere"/><span className="map-coordinate">THE FORGE ARCHIPELAGO<br/>10 worlds. One continuous journey.</span>
+ <canvas ref={canvas} aria-label="Interactive three-dimensional curriculum islands. Drag to rotate, use buttons to zoom." onPointerDown={e=>{drag.current={x:e.clientX,a:angle,moved:false};e.currentTarget.setPointerCapture(e.pointerId)}} onPointerMove={e=>{if(drag.current){const dx=e.clientX-drag.current.x;drag.current.moved=Math.abs(dx)>3;setAngle(Math.max(-.65,Math.min(.9,drag.current.a+dx*.003)))}}} onPointerUp={()=>{drag.current=null}}/>
+ {labels.map((p,i)=><button key={i} className={'island-label '+(i===selected?'current':'')} style={{left:p.x,top:p.y}} onClick={()=>onSelect(i)} aria-label={`Explore phase ${i+1}: ${phases[i]?.title}`}><span>{String(i+1).padStart(2,'0')}</span>{i===selected&&<b>{phases[i]?.title}</b>}</button>)}
+ <div className="map-controls"><span>DRAG TO EXPLORE</span><button aria-label="Zoom in" onClick={()=>setZoom(v=>Math.min(1.4,v+.1))}><Plus size={15}/></button><button aria-label="Zoom out" onClick={()=>setZoom(v=>Math.max(.7,v-.1))}><Minus size={15}/></button><button aria-label="Reset map" onClick={()=>{setAngle(.23);setZoom(1)}}><RotateCcw size={14}/></button></div><span className="compass">N <MoveUpRight size={27}/></span>
+ </div>
+}

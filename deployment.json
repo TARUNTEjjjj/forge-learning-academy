@@ -1,0 +1,12 @@
+{
+  "provider": "Cloudflare Pages",
+  "project": "forge-learning-academy",
+  "productionBranch": "main",
+  "url": "https://forge-learning-academy.pages.dev/",
+  "deploymentUrl": "https://b2f7fb04.forge-learning-academy.pages.dev/",
+  "storage": "browser-local",
+  "public": true,
+  "verificationDate": "2026-10-30",
+  "previousDeploymentUrl": "https://5816381e.forge-learning-academy.pages.dev/",
+  "design": "Midnight and crimson"
+}
