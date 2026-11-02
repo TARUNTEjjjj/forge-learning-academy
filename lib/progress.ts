@@ -126,18 +126,6 @@ export function validateAction(value: unknown): ProgressAction {
   }
 }
 
-export function requireIdentity(headers: Headers): string {
-  const userId = headers.get("oai-authenticated-user-id");
-  if (!userId || !headers.get("oai-authenticated-user-email")) throw new ProgressError("Sign in with ChatGPT to sync your learning progress.", 401, "identity_required");
-  if (userId.length > 256) throw new ProgressError("Your sign-in session is not valid. Please sign in again.", 401, "identity_required");
-  return userId;
-}
-/** The expected viewer is a stale-tab guard, never an authentication credential. */
-export function requireViewer(headers: Headers): string {
-  const userId = requireIdentity(headers);
-  if (headers.get("x-forge-viewer") !== userId) throw new ProgressError("Your account changed or this page needs updating. Reload Forge before continuing. Your drafts stay with their original account.", 409, "account_changed");
-  return userId;
-}
 export function validatePostRequest(request: Request): void {
   const origin = request.headers.get("origin");
   if (!origin || origin !== new URL(request.url).origin || request.headers.get("sec-fetch-site") === "cross-site") throw new ProgressError("This request must come from this website.", 403);

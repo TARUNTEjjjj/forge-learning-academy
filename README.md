@@ -2,12 +2,11 @@
 
 Live website: https://forge-learning-academy.pages.dev/
 
-Private source repository: https://github.com/TARUNTEjjjj/forge-learning-academy
+Source repository: https://github.com/TARUNTEjjjj/forge-learning-academy
 
-GitHub access is private. The public website continues to run on Cloudflare Pages.
-Visitors can inspect the frontend assets delivered to their browsers. Repository
-source, tests, and commit history require repository access. Pushing to this
-repository does not automatically deploy; use the publish command below.
+The source repository and website are public. The website runs on Cloudflare Pages.
+Pushing to this repository does not automatically deploy; use the publish command
+below.
 
 This edition runs entirely in the visitor's browser and is hosted as static
 assets on Cloudflare Pages. It includes the 3D learning map, 50 guided modules,
