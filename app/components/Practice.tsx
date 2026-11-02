@@ -241,14 +241,14 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
           <div className="lab-editor-heading"><span><span className="lab-python-dot" /> solution.py</span><span>Python 3.14 <span className="lab-editor-local">· local execution</span></span></div>
           <div className="lab-editor">
             <div ref={lineRef} className="lab-line-numbers" aria-hidden="true">{code.split("\n").map((_, i) => <div key={i}>{i + 1}</div>)}</div>
-            <textarea ref={editorRef} aria-label="Python code editor" disabled={busy} spellCheck={false} autoCapitalize="off" autoCorrect="off" value={code} maxLength={30000} onChange={event => updateCode(event.target.value)} onScroll={event => { if (lineRef.current) lineRef.current.scrollTop = event.currentTarget.scrollTop; }} onKeyDown={event => {
+            <textarea ref={editorRef} aria-label="Python code editor" readOnly={busy} spellCheck={false} autoCapitalize="off" autoCorrect="off" value={code} maxLength={30000} onChange={event => updateCode(event.target.value)} onScroll={event => { if (lineRef.current) lineRef.current.scrollTop = event.currentTarget.scrollTop; }} onKeyDown={event => {
               if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void run(false); }
             }} />
           </div>
           <div className="lab-editor-footer"><span>Return a value from <code>{mission.functionName}</code> · Ctrl / ⌘ Enter to check</span><button className="lab-text-button" onClick={() => setResetOpen(!resetOpen)} disabled={busy}><RotateCcw size={13} /> Reset code</button></div>
           {resetOpen && <div className="lab-reset-confirm"><span>Replace this mission’s code with its starter?</span><button onClick={() => { updateCode(mission.starter); setFeedback(null); setStatus("idle"); setResetOpen(false); }}>Reset</button><button onClick={() => setResetOpen(false)}>Keep my code</button></div>}
         </div>
-        <div className="lab-actions"><div><button className="lab-secondary" onClick={() => void run(true)} disabled={busy}><Play size={15} /> Run examples</button><button className="lab-primary" onClick={() => void run(false)} disabled={busy}>{busy ? <Loader2 size={16} className="lab-spin" /> : <CheckCircle2 size={16} />}{status === "loading" ? "Loading Python…" : status === "running" ? "Checking…" : "Check solution"}</button>{busy && <button className="lab-stop" onClick={cancel}><Square size={13} /> Stop</button>}</div><button className="lab-text-button" onClick={() => setHintCount(value => Math.min(value + 1, mission.hints.length))} disabled={hintCount >= mission.hints.length}><Lightbulb size={16} /> {hintCount === 0 ? "A small nudge" : hintCount < mission.hints.length ? "Another nudge" : "All hints shown"}</button></div>
+        <div className="lab-actions"><div><button className="lab-secondary" onClick={() => void run(true)} aria-disabled={busy}><Play size={15} /> Run examples</button><button className="lab-primary" onClick={() => void run(false)} aria-disabled={busy}>{busy ? <Loader2 size={16} className="lab-spin" /> : <CheckCircle2 size={16} />}{status === "loading" ? "Loading Python…" : status === "running" ? "Checking…" : "Check solution"}</button>{busy && <button className="lab-stop" onClick={cancel}><Square size={13} /> Stop</button>}</div><button className="lab-text-button" onClick={() => setHintCount(value => Math.min(value + 1, mission.hints.length))} disabled={hintCount >= mission.hints.length}><Lightbulb size={16} /> {hintCount === 0 ? "A small nudge" : hintCount < mission.hints.length ? "Another nudge" : "All hints shown"}</button></div>
         {busy && <p className="lab-runtime-message" role="status">{status === "loading" ? "Preparing an isolated Python workspace. The first run downloads the runtime and may take up to a minute." : "Running your function against the selected cases. This run stops automatically after 8 seconds."}</p>}
         {hintCount > 0 && <div className="lab-hints">{mission.hints.slice(0, hintCount).map((hint, index) => <p key={hint}><span>{index + 1}</span>{hint}</p>)}</div>}
         {feedback && <section className="lab-feedback" aria-live="polite" aria-label="Code feedback">
@@ -275,7 +275,7 @@ const LAB_CSS = `
 .lab-root{--lab-bg:#0B1020;--lab-panel:#121A2D;--lab-line:#2B3650;--lab-text:#F5F3EB;--lab-muted:#A6AFC1;--lab-accent:#FF6478;--lab-success:#91DDCF;--lab-primary:#D82745;color:var(--lab-text);font-family:inherit}
 .lab-root button,.lab-root textarea{font:inherit}
 .lab-root button{cursor:pointer}
-.lab-root button:disabled{cursor:not-allowed;opacity:.55}
+.lab-root button:disabled,.lab-root button[aria-disabled="true"]{cursor:not-allowed;opacity:.55}
 .lab-root button:focus-visible,.lab-root a:focus-visible,.lab-root summary:focus-visible{outline:2px solid var(--lab-accent);outline-offset:4px}
 .lab-root p{line-height:1.65}
 .lab-topbar{display:flex;justify-content:space-between;align-items:center;gap:24px;margin-bottom:30px}
@@ -391,10 +391,10 @@ const LAB_CSS = `
 .lab-editor textarea{caret-color:var(--lab-accent);font-size:14px;line-height:24px}
 .lab-line-numbers{font-size:12px;line-height:24px;background:var(--lab-bg);border-right:1px solid var(--lab-line)}
 .lab-editor textarea::selection{background:rgba(169,155,255,.3);color:var(--lab-text)}
-.lab-editor textarea:disabled{opacity:.75}
+.lab-editor textarea:disabled,.lab-editor textarea:read-only{opacity:.75}
 .lab-primary{box-shadow:0 3px 14px rgba(255,100,120,.1)}
-.lab-primary:hover:not(:disabled){background:#C51F3B;border-color:#C51F3B}
-.lab-secondary:hover:not(:disabled){border-color:var(--lab-violet)}
+.lab-primary:hover:not(:disabled):not([aria-disabled="true"]){background:#C51F3B;border-color:#C51F3B}
+.lab-secondary:hover:not(:disabled):not([aria-disabled="true"]){border-color:var(--lab-violet)}
 .lab-stop:hover:not(:disabled){background:rgba(255,180,190,.08)}
 .lab-text-button:hover:not(:disabled),.lab-resource a:hover{color:var(--lab-text)}
 .lab-runtime-message{color:var(--lab-muted)}
