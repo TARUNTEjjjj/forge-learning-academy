@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowUpRight, Check, Code2, Download, FolderGit2, GitBranch, Plus, RotateCcw, Save, ShieldCheck, Trash2 } from "lucide-react";
-import type { LearnerState } from "../../lib/progress";
+import { repositoryUrl, type LearnerState } from "../../lib/progress";
 import { byteLength, createProject, createProjectZip, FILE_LIMIT, normalizeSavedProject, PROJECT_LIMIT, PROJECT_TEMPLATES, projectContentEqual, validateFilePath, validateFiles, withFiles, WORKFLOW_STARTER, type ProjectDocument, type ProjectFile } from "../../lib/project-files";
 import { hasVolatileProjectDrafts, markProjectDraftSaved, parseProjectDraftSnapshot, projectDraftEpoch, readProjectDraft, readProjectDraftSnapshot, removeProjectDraft, resolveProjectDraft, saveProjectDraft, subscribeProjectDrafts } from "../../lib/draft-store";
 
@@ -38,7 +38,8 @@ function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
   const activeFile = project?.files.find(file => file.path === tab) || project?.files[0];
   const dirty = !!draft && draft.revision !== draft.savedRevision;
   const template = PROJECT_TEMPLATES.find(item => item.id === project?.templateId);
-  const validation = project ? validateFiles(project.files) || (!project.title.trim() ? "Give your project a title before saving." : "") : "";
+  const repoProblem = project ? (() => { try { repositoryUrl(project.repoUrl); return ""; } catch (reason) { return reason instanceof Error ? reason.message : "Use a GitHub repository URL."; } })() : "";
+  const validation = project ? validateFiles(project.files) || (!project.title.trim() ? "Give your project a title before saving." : "") || repoProblem : "";
 
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
