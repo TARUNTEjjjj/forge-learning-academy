@@ -155,6 +155,7 @@ function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
 }
 
 const PROJECT_CSS = `
+.projects-page .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .projects-page .project-card:disabled{opacity:.6;cursor:not-allowed}
 .project-start{display:flex;align-items:center;gap:6px;margin-top:16px;color:#A99BFF;font-size:12px;font-weight:700}
 .project-picker,.project-description,.project-repo{display:flex;flex-direction:column;gap:8px;font-size:12px;font-weight:650;margin:18px 0}
