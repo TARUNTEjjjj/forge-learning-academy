@@ -66,7 +66,7 @@ export default function Forge({userKey,accountEmail=null}:{userKey:string;accoun
  if(accountChanged)return <main className="standalone-page"><p className="eyebrow">ACCOUNT CHANGED</p><h1>Reload your workspace.</h1><p role="alert">Your sign-in changed in another tab or this page needs updating. Reload before continuing. Saved data and recovery drafts stay with their original account.</p><button className="primary" onClick={()=>location.reload()}>Reload Forge</button></main>;
 
  const toggleFocus=()=>{if(!focus&&elapsed>=MAX_FOCUS_SECONDS){setNotice('Save this four-hour session and take a break before starting another.');return}setFocus(!focus)};
- const go=(v:string)=>{setView(v);location.hash=v;setShowMenu(false);setSearch('');setFilter('All');window.scrollTo({top:0,behavior:'smooth'})};
+ const go=(v:string)=>{setView(v);location.hash=v;setShowMenu(false);setSearch('');setFilter('All');window.scrollTo({top:0,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'})};
  const openLesson=(m:Mod)=>{setEvidence(state.modules[m.id]?.evidence||'');setLesson(m)};
  const phases=course?.phases||[],phase=phases[selected],allModules=phases.flatMap(p=>p.modules),done=allModules.filter(m=>state.modules[m.id]?.complete).length,nextModule=allModules.find(m=>!state.modules[m.id]?.complete)||allModules[0];
  const minutes=state.sessions.reduce((s,x)=>s+x.minutes,0),hours=minutes/60,total=course?.totalHours||2000,progress=Math.min(100,hours/total*100),weeks=Math.ceil(total/(state.profile.weeklyHours||20));
