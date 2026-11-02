@@ -117,6 +117,7 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
   const runSerial = useRef(0);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const lineRef = useRef<HTMLDivElement>(null);
+  const resultRef = useRef(onResult); resultRef.current = onResult;
 
   useEffect(() => {
     const cancelRun = () => { runSerial.current++; cleanup.current?.(); cleanup.current = null; };
@@ -167,7 +168,7 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
     const fail = (message: string, performance = false) => {
       if (serial !== runSerial.current || settled) return;
       dispose(); setStatus("error"); setFeedback({ results: [], error: message, output: "", sample });
-      if (performance && !sample) onResult?.({ missionId: mission.id, passed: 0, total: tests.length, category: "performance" });
+      if (performance && !sample) resultRef.current?.({ missionId: mission.id, passed: 0, total: tests.length, category: "performance" });
     };
     timer = setTimeout(() => fail("Python took too long to load. Check your connection, then retry. Your code is still here."), 60000);
     try {
@@ -194,12 +195,12 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
           const result: Feedback = { ...data.payload, output: typeof data.output === "string" ? data.output.slice(0, 4000) : "", sample };
           dispose(); setStatus(result.error ? "error" : "done"); setFeedback(result);
           if (!sample && result.error) {
-            onResult?.({ missionId: mission.id, passed: 0, total: tests.length, category: result.error.startsWith("Python paused near line") ? "syntax" : "logic" });
+            resultRef.current?.({ missionId: mission.id, passed: 0, total: tests.length, category: result.error.startsWith("Python paused near line") ? "syntax" : "logic" });
           }
           if (!sample && !result.error) {
             const passed = tests.filter((test, i) => passedCase(result.results[i], test.expected, mission)).length;
             const examplesPass = tests.every((test, i) => !test.sample || passedCase(result.results[i], test.expected, mission));
-            onResult?.({ missionId: mission.id, passed, total: tests.length, category: passed === tests.length ? "success" : examplesPass ? "edge-cases" : "logic" });
+            resultRef.current?.({ missionId: mission.id, passed, total: tests.length, category: passed === tests.length ? "success" : examplesPass ? "edge-cases" : "logic" });
             if (passed === tests.length) {
               const next = [...new Set([...completedIds(readStore(`${storePrefix}completed`, "[]")), mission.id])];
               if (!writeStore(`${storePrefix}completed`, JSON.stringify(next))) setStorageNotice(true);
