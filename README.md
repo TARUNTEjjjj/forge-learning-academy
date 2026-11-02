@@ -42,6 +42,8 @@ Run the tests on macOS, Linux, or WSL with `python3` and a POSIX `sh`
 available on PATH. A C++20 compiler enables the optional C++ example check:
 
 ```sh
+npm test
+# equivalent to:
 node --test tests/browser-progress.test.mjs tests/curriculum.test.mjs tests/practice-models.test.mjs tests/projects.test.mjs
 ```
 
