@@ -22,7 +22,8 @@ export type ProgressAction = ActionBase & (
   | { action: "recordAttempt"; missionId: string; passed: number; total: number; category: AttemptCategory }
   | { action: "deleteData"; confirm: "DELETE MY DATA" }
 );
-export const MAX_REQUEST_BYTES = 200_000;
+// Worst-case JSON-escaped saveProject body: 6 × (160,000 file bytes + 40,000 for main.py sent again as code) + 50,000 escaped metadata headroom.
+export const MAX_REQUEST_BYTES = 1_250_000;
 export const MAX_STATE_BYTES = 1_500_000;
 
 export class ProgressError extends Error {
@@ -131,7 +132,7 @@ export function validatePostRequest(request: Request): void {
   if (!origin || origin !== new URL(request.url).origin || request.headers.get("sec-fetch-site") === "cross-site") throw new ProgressError("This request must come from this website.", 403);
   if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") throw new ProgressError("Use application/json for progress updates.", 415);
   const size = request.headers.get("content-length");
-  if (size && (!/^\d+$/.test(size) || Number(size) > MAX_REQUEST_BYTES)) throw new ProgressError("This update is too large. Keep the complete update under 200,000 bytes.", 413);
+  if (size && (!/^\d+$/.test(size) || Number(size) > MAX_REQUEST_BYTES)) throw new ProgressError(`This update is too large. Keep the complete update under ${MAX_REQUEST_BYTES.toLocaleString("en-US")} bytes.`, 413);
 }
 export async function readBoundedJson(request: Request): Promise<unknown> {
   const reader = request.body?.getReader();
@@ -143,7 +144,7 @@ export async function readBoundedJson(request: Request): Promise<unknown> {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > MAX_REQUEST_BYTES) { await reader.cancel(); throw new ProgressError("This update is too large. Keep the complete update under 200,000 bytes.", 413); }
+      if (size > MAX_REQUEST_BYTES) { await reader.cancel(); throw new ProgressError(`This update is too large. Keep the complete update under ${MAX_REQUEST_BYTES.toLocaleString("en-US")} bytes.`, 413); }
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }

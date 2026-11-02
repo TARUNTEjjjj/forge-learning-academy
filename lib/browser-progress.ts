@@ -140,7 +140,7 @@ export function createBrowserProgressRequest(dependencies: BrowserProgressDepend
         let serialized: string | undefined;
         try { serialized = JSON.stringify(payload); } catch { throw new ProgressError("The update is not valid JSON."); }
         if (serialized === undefined) throw new ProgressError("An update body is required.");
-        if (encoder.encode(serialized).byteLength > MAX_REQUEST_BYTES) throw new ProgressError("This update is too large. Keep the complete update under 200,000 bytes.", 413);
+        if (encoder.encode(serialized).byteLength > MAX_REQUEST_BYTES) throw new ProgressError(`This update is too large. Keep the complete update under ${MAX_REQUEST_BYTES.toLocaleString("en-US")} bytes.`, 413);
         action = validateAction(JSON.parse(serialized));
         operationId = action.operationId ?? cryptoApi.randomUUID();
         const { operationId: ignoredId, ...normalizedPayload } = action; void ignoredId;

@@ -160,7 +160,7 @@ test("shared validation rejects unsafe files, incorrect practice reports, and ex
   const { request, storage } = fixture();
   const cases = [operation({ minutes: 241 }), profile({ language: "javascript" }), operation({ action: "recordAttempt", missionId: "hello", passed: 1, total: 2, category: "success" }), operation({ action: "saveProject", id: "test", title: "Test", description: "", code: "", repoUrl: "", status: "draft", files: [{ path: "main.py", content: "" }, { path: "../escape", content: "" }] })];
   for (const action of cases) await body(await request("POST", action), 400);
-  await body(await request("POST", profile({ extra: "é".repeat(100_000) })), 413);
+  await body(await request("POST", profile({ extra: "é".repeat(progress.MAX_REQUEST_BYTES / 2) })), 413);
   const cyclic = {}; cyclic.self = cyclic;
   await body(await request("POST", cyclic), 400);
   assert.equal(storage.values.size, 0);
