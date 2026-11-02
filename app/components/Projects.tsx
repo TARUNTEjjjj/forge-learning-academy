@@ -115,7 +115,7 @@ function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
     const persisted = removeProjectDraft(userKey, project.id);
     if (persisted) setDiscarded(project);
     setDiscarding(false); setRemoved(null);
-    setMessage(persisted ? "Local draft removed. You can restore it below during this visit." : "The browser could not remove this draft. Export it and retry before closing.");
+    setMessage(persisted ? "Local draft removed. You can restore it below while you stay on Build & contribute." : "The browser could not remove this draft. Export it and retry before closing.");
   }
   function undoDiscard() {
     if (!discarded) return;
@@ -143,7 +143,7 @@ function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
         {!signed && <p className="fine-print">Browser saving is not ready. You can still edit and download a ZIP; check the storage notice before leaving.</p>}
         {validation && <p className="project-error" role="alert">{validation}</p>}
         <div className="project-export-actions"><button className="outline" onClick={() => download(project.files)}><Download size={16}/>Download project ZIP</button><button className="text-button" onClick={() => download([...project.files, { path: ".github/workflows/test.yml", content: WORKFLOW_STARTER }], "-with-ci")}><Download size={15}/>ZIP with optional CI starter</button>{draft && <button className="text-button" disabled={busy} onClick={() => setDiscarding(true)}><Trash2 size={14}/>{saved ? "Discard local changes" : "Remove local draft"}</button>}</div>
-        {discarding && <div className="project-discard" role="group" aria-label="Confirm removal of local draft"><p>{saved ? "Return to the last saved browser copy?" : "Remove this draft from this device?"} Download a ZIP first if you want a permanent backup. You can undo until you leave this page.</p><button className="outline small" onClick={() => download(project.files)}><Download size={14}/>Download backup</button><button className="outline small" onClick={discard}>Confirm removal</button><button className="text-button" onClick={() => setDiscarding(false)}>Keep editing</button></div>}
+        {discarding && <div className="project-discard" role="group" aria-label="Confirm removal of local draft"><p>{saved ? "Return to the last saved browser copy?" : "Remove this draft from this device?"} Download a ZIP first if you want a permanent backup. You can undo while you stay on Build & contribute.</p><button className="outline small" onClick={() => download(project.files)}><Download size={14}/>Download backup</button><button className="outline small" onClick={discard}>Confirm removal</button><button className="text-button" onClick={() => setDiscarding(false)}>Keep editing</button></div>}
         <div className="callout"><GitBranch size={21}/><span><b>Ready for real Git?</b> Download your project ZIP, extract it, and open the folder in VS Code. Run the tests, then follow the steps below to publish through your own GitHub account. Add its repository URL above when you are ready.</span></div>
         <p className="fine-print">Saving here stores a copy in this browser; it does not create a GitHub commit. The optional CI starter is included in its ZIP download. Review it and run your tests before publishing.</p>
       </> : <div className="project-empty"><FolderGit2 size={36}/><p>Choose one of the three starters above. Each choice creates an independent project with editable Python, tests, README, and .gitignore files.</p></div>}
