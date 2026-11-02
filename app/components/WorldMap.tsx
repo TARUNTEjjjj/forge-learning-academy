@@ -25,7 +25,7 @@ export default function WorldMap({phases,selected,onSelect,completed=[]}:{phases
  return <div className="world-wrap" ref={wrap}>
  <div className="map-atmosphere"/><span className="map-coordinate">THE FORGE ARCHIPELAGO<br/>10 worlds. One continuous journey.</span>
  <canvas ref={canvas} aria-label="Interactive three-dimensional curriculum islands. Drag to rotate, use buttons to zoom." onPointerDown={e=>{drag.current={x:e.clientX,a:angle,moved:false};e.currentTarget.setPointerCapture(e.pointerId)}} onPointerMove={e=>{if(drag.current){const dx=e.clientX-drag.current.x;drag.current.moved=Math.abs(dx)>3;setAngle(Math.max(-.65,Math.min(.9,drag.current.a+dx*.003)))}}} onPointerUp={()=>{drag.current=null}}/>
- {labels.map((p,i)=><button key={i} className={'island-label '+(i===selected?'current':'')} style={{left:p.x,top:p.y}} onClick={()=>onSelect(i)} aria-label={`Explore phase ${i+1}: ${phases[i]?.title}`}><span>{String(i+1).padStart(2,'0')}</span>{i===selected&&<b>{phases[i]?.title}</b>}</button>)}
+ {labels.map((p,i)=><button key={i} className={'island-label '+(i===selected?'current':'')} style={{left:p.x,top:p.y}} onClick={()=>onSelect(i)} aria-label={`Explore phase ${i+1}: ${phases[i]?.title}`} aria-pressed={i===selected}><span>{String(i+1).padStart(2,'0')}</span>{i===selected&&<b>{phases[i]?.title}</b>}</button>)}
  <div className="map-controls"><span>DRAG TO EXPLORE</span><button aria-label="Zoom in" onClick={()=>setZoom(v=>Math.min(1.4,v+.1))}><Plus size={15}/></button><button aria-label="Zoom out" onClick={()=>setZoom(v=>Math.max(.7,v-.1))}><Minus size={15}/></button><button aria-label="Reset map" onClick={()=>{setAngle(.23);setZoom(1)}}><RotateCcw size={14}/></button></div><span className="compass">N <MoveUpRight size={27}/></span>
  </div>
 }
