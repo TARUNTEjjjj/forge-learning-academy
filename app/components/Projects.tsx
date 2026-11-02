@@ -58,7 +58,7 @@ function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
     if (ids.length >= PROJECT_LIMIT) { setError("This workspace has 20 projects. Export and remove a local-only draft to make room."); return; }
     const next = createProject(templateId);
     if (!edit(next)) return; setSelected(next.id); setTab("main.py"); setRemoved(null); setDiscarding(false);
-    setMessage("New project created. Edits are recovered automatically on this device.");
+    if (!hasVolatileProjectDrafts(userKey)) setMessage("New project created. Edits are recovered automatically on this device.");
   }
   function select(id: string) { setSelected(id); setTab("main.py"); setRemoved(null); setDiscarding(false); setMessage(""); setError(""); }
   function editFile(content: string) {
