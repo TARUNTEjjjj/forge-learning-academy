@@ -5,6 +5,7 @@ import WorldMap from './WorldMap';
 import {browserProgressRequest,BROWSER_PROGRESS_KEY} from '../../lib/browser-progress';
 import Practice, {resetPracticeStorage} from './Practice';
 import {clearProjectDrafts} from '../../lib/draft-store';
+import {createSerialTaskQueue} from '../../lib/serial-task-queue';
 import GitLab from './GitLab';
 import Projects from './Projects';
 import {useDialogFocus} from './useDialogFocus';
@@ -22,10 +23,12 @@ const MAX_FOCUS_SECONDS=240*60;
 const nav=[{id:'overview',label:'Overview',icon:LayoutDashboard},{id:'path',label:'Learning path',icon:Mountain},{id:'practice',label:'Practice lab',icon:Code2},{id:'git',label:'Git playground',icon:GitBranch},{id:'arena',label:'Competition arena',icon:Trophy},{id:'projects',label:'Build & contribute',icon:FolderGit2},{id:'resources',label:'Resource library',icon:BookOpen},{id:'progress',label:'My progress',icon:ChartNoAxesCombined}];
 function IconBox({children,color='green'}:{children:ReactNode;color?:string}){return <span className={'iconbox '+color}>{children}</span>}
 export default function Forge({userKey,accountEmail=null}:{userKey:string;accountEmail?:string|null}){
- const [view,setView]=useState('overview'),[course,setCourse]=useState<Course|null>(null),[loadError,setLoadError]=useState(''),[selected,setSelected]=useState(0),[lesson,setLesson]=useState<Mod|null>(null),[evidence,setEvidence]=useState(''),[state,setState]=useState<State>(empty),[revision,setRevision]=useState(0),[signed,setSigned]=useState(false),[connection,setConnection]=useState('Loading your progress…'),[busy,setBusy]=useState(false),[notice,setNotice]=useState(''),[recommendation,setRecommendation]=useState({title:'Start with something small.',body:'Create a file, run a command, and build your first useful program.',missionId:null as string|null}),[search,setSearch]=useState(''),[filter,setFilter]=useState('All'),[showMenu,setShowMenu]=useState(false),[focus,setFocus]=useState(false),[elapsed,setElapsed]=useState(0),[settings,setSettings]=useState(false);
+ const [view,setView]=useState('overview'),[course,setCourse]=useState<Course|null>(null),[loadError,setLoadError]=useState(''),[selected,setSelected]=useState(0),[lesson,setLesson]=useState<Mod|null>(null),[evidence,setEvidence]=useState(''),[state,setState]=useState<State>(empty),[signed,setSigned]=useState(false),[connection,setConnection]=useState('Loading your progress…'),[busy,setBusy]=useState(false),[notice,setNotice]=useState(''),[recommendation,setRecommendation]=useState({title:'Start with something small.',body:'Create a file, run a command, and build your first useful program.',missionId:null as string|null}),[search,setSearch]=useState(''),[filter,setFilter]=useState('All'),[showMenu,setShowMenu]=useState(false),[focus,setFocus]=useState(false),[elapsed,setElapsed]=useState(0),[settings,setSettings]=useState(false);
  const [accountChanged,setAccountChanged]=useState(false);
  const accountLocked=useRef(false);
- const saving=useRef(false),timerRef=useRef<number|null>(null);
+ const timerRef=useRef<number|null>(null);
+ const revisionRef=useRef(0),saveQueue=useRef(createSerialTaskQueue());
+ const mutationRef=useRef(performMutation);mutationRef.current=performMutation;
  const pendingSave=useRef<{key:string;revision:number;operationId:string}|null>(null);
  const lessonRef=useDialogFocus(Boolean(lesson),()=>setLesson(null));
  useEffect(()=>{const changed=()=>invalidateAccount();window.addEventListener('forge-account-changed',changed);return()=>window.removeEventListener('forge-account-changed',changed)},[]);
@@ -34,22 +37,22 @@ export default function Forge({userKey,accountEmail=null}:{userKey:string;accoun
  useEffect(()=>{const changed=(event:StorageEvent)=>{if(event.key===BROWSER_PROGRESS_KEY||event.key===null)refresh()};addEventListener('storage',changed);return()=>removeEventListener('storage',changed)},[]);
  useEffect(()=>{if(!notice)return;const t=setTimeout(()=>setNotice(''),5500);return()=>clearTimeout(t)},[notice]);
  useEffect(()=>{if(!showMenu)return;const close=(event:KeyboardEvent)=>{if(event.key==='Escape'){setShowMenu(false);document.querySelector<HTMLButtonElement>('.mobile-menu')?.focus()}};addEventListener('keydown',close);return()=>removeEventListener('keydown',close)},[showMenu]);
- function invalidateAccount(){accountLocked.current=true;setAccountChanged(true);setState(empty);setRevision(0);setSigned(false);setFocus(false);setElapsed(0);setSettings(false);setLesson(null);setEvidence('');setNotice('');setConnection('Reload required');}
+ function invalidateAccount(){accountLocked.current=true;setAccountChanged(true);setState(empty);revisionRef.current=0;setSigned(false);setFocus(false);setElapsed(0);setSettings(false);setLesson(null);setEvidence('');setNotice('');setConnection('Reload required');}
  async function refresh(){try{
   const r=await browserProgressRequest('GET');
-  if(r.status===401){setState(empty);setRevision(0);setSigned(false);if(userKey!=='anonymous')invalidateAccount();else setConnection('Explore mode');return}
+  if(r.status===401){setState(empty);revisionRef.current=0;setSigned(false);if(userKey!=='anonymous')invalidateAccount();else setConnection('Explore mode');return}
   const d=await r.json() as ProgressResponse & {code?:string};
   if(d.code==='account_changed'){invalidateAccount();return}
   if(!r.ok)throw Error((d as {error?:string}).error||'Browser storage is unavailable. You can explore lessons and download projects.');
   if(accountLocked.current)return;
-  setState(d.state);setRevision(d.revision);setRecommendation(d.recommendation);setSigned(true);setConnection('Saved in this browser')
+  setState(d.state);revisionRef.current=d.revision;setRecommendation(d.recommendation);setSigned(true);setConnection('Saved in this browser')
  }catch(error){if(!accountLocked.current){setConnection('Storage unavailable');setNotice(error instanceof Error?error.message:'Browser storage is unavailable. Export important work before leaving.')}}}
- async function mutate(fields:Record<string,unknown>){
+ function mutate(fields:Record<string,unknown>){return saveQueue.current(()=>mutationRef.current(fields))}
+ async function performMutation(fields:Record<string,unknown>){
   if(accountLocked.current)return false;
   if(!signed){setNotice('Browser storage is unavailable. You can explore lessons and download project files. Enable site storage to save progress.');return false}
-  if(saving.current){setNotice('A save is already in progress. Please try again in a moment.');return false}
-  const key=JSON.stringify(fields);const pending=pendingSave.current?.key===key?pendingSave.current:{key,revision,operationId:crypto.randomUUID()};pendingSave.current=pending;
-  saving.current=true;setBusy(true);
+  const key=JSON.stringify(fields);const pending=pendingSave.current?.key===key?pendingSave.current:{key,revision:revisionRef.current,operationId:crypto.randomUUID()};pendingSave.current=pending;
+  setBusy(true);
   try{
    const r=await browserProgressRequest('POST',{...fields,revision:pending.revision,operationId:pending.operationId});
    if(r.status===401){invalidateAccount();return false}
@@ -58,9 +61,9 @@ export default function Forge({userKey,accountEmail=null}:{userKey:string;accoun
    if(accountLocked.current)return false;
    if(r.status===409){pendingSave.current=null;await refresh();throw Error('Progress changed in another tab. Your data has been refreshed; please try again.')}
    if(!r.ok){if(r.status<500&&r.status!==429)pendingSave.current=null;throw Error(r.status===429?'Please wait '+(r.headers.get('Retry-After')||'60')+' seconds before saving again.':(typeof d.error==='string'?d.error:d.error?.message)||'Unable to confirm the save. Retry the same change to check safely.')}
-   pendingSave.current=null;setState(d.state);setRevision(d.revision);setRecommendation(d.recommendation);setConnection('Saved in this browser');return true;
+   pendingSave.current=null;setState(d.state);revisionRef.current=d.revision;setRecommendation(d.recommendation);setConnection('Saved in this browser');return true;
   }catch(e){if(!accountLocked.current)setNotice(e instanceof Error&&['TimeoutError','AbortError'].includes(e.name)?'The save timed out. Your draft is preserved. Retry the same change to check its outcome safely.':e instanceof Error?e.message:'Unable to confirm the save. Retry the same change to check safely.');return false}
-  finally{saving.current=false;setBusy(false)}
+  finally{setBusy(false)}
  }
 
  if(accountChanged)return <main className="standalone-page"><p className="eyebrow">ACCOUNT CHANGED</p><h1>Reload your workspace.</h1><p role="alert">Your sign-in changed in another tab or this page needs updating. Reload before continuing. Saved data and recovery drafts stay with their original account.</p><button className="primary" onClick={()=>location.reload()}>Reload Forge</button></main>;

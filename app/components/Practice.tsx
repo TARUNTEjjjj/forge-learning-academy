@@ -137,17 +137,24 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
     if (!busy) setStatus("idle");
     if (!writeStore(`${storePrefix}code.${missionId}`, value)) setStorageNotice(true);
   }
+  function focusEditorAfterRemoval() {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && (active.closest(".lab-feedback") || active.closest(".lab-stop"))) editorRef.current?.focus();
+  }
   function selectMission(id: string) {
+    focusEditorAfterRemoval();
     runSerial.current++; cleanup.current?.(); cleanup.current = null;
     setMissionId(id); setStatus("idle"); setFeedback(null); setHintCount(0); setResetOpen(false);
   }
   function cancel() {
+    focusEditorAfterRemoval();
     runSerial.current++; cleanup.current?.(); cleanup.current = null;
     setStatus("idle"); setFeedback({ results: [], error: "Run stopped. Your code is saved here; edit it and try again whenever you are ready.", output: "", sample: lastSample });
   }
 
   async function run(sample: boolean) {
     if (busy) return;
+    focusEditorAfterRemoval();
     cleanup.current?.();
     const serial = ++runSerial.current;
     setStatus("loading"); setFeedback(null); setLastSample(sample);
@@ -167,6 +174,7 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
     cleanup.current = dispose;
     const fail = (message: string, performance = false) => {
       if (serial !== runSerial.current || settled) return;
+      focusEditorAfterRemoval();
       dispose(); setStatus("error"); setFeedback({ results: [], error: message, output: "", sample });
       if (performance && !sample) resultRef.current?.({ missionId: mission.id, passed: 0, total: tests.length, category: "performance" });
     };
@@ -193,6 +201,7 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
           if (!started) return;
           if (!validateRunnerResult(data.payload, tests.length)) { fail("The program returned an unexpected result format. Return a plain Python value matching the contract."); return; }
           const result: Feedback = { ...data.payload, output: typeof data.output === "string" ? data.output.slice(0, 4000) : "", sample };
+          focusEditorAfterRemoval();
           dispose(); setStatus(result.error ? "error" : "done"); setFeedback(result);
           if (!sample && result.error) {
             resultRef.current?.({ missionId: mission.id, passed: 0, total: tests.length, category: result.error.startsWith("Python paused near line") ? "syntax" : "logic" });
