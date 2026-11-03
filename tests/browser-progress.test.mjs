@@ -8,6 +8,7 @@ const read = path => readFileSync(new URL(path, import.meta.url), "utf8");
 const url = source => `data:text/javascript;base64,${Buffer.from(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText).toString("base64")}`;
 const progressUrl = url(read("../lib/progress.ts"));
 const progress = await import(progressUrl);
+const { createSerialTaskQueue } = await import(url(read("../lib/serial-task-queue.ts")));
 const { createBrowserProgressRequest, browserProgressRequest, BROWSER_PROGRESS_KEY, BROWSER_RECEIPT_LIMIT } = await import(url(read("../lib/browser-progress.ts").replace('"./progress"', JSON.stringify(progressUrl))));
 
 class Storage {
@@ -191,4 +192,45 @@ test("the shared workspace byte ceiling rejects a large update without losing ex
 test("the default adapter is importable without a browser and fails clearly when called there", async () => {
   const response = await body(await browserProgressRequest("GET"), 503);
   assert.equal(response.code, "browser_storage_unavailable");
+});
+
+
+test("a completed practice check waits for an in-flight profile save and uses its revision", async () => {
+  const { request } = fixture();
+  const queue = createSerialTaskQueue();
+  let revision = 0;
+  let release;
+  const delayedSave = new Promise(resolve => { release = resolve; });
+  let profileStarted;
+  const started = new Promise(resolve => { profileStarted = resolve; });
+  const saveProfile = queue(async () => {
+    profileStarted();
+    await delayedSave;
+    const result = await body(await request("POST", profile({ name: "Queued learner", revision })));
+    revision = result.revision;
+  });
+  await started;
+  let attemptStarted = false;
+  const saveAttempt = queue(async () => {
+    attemptStarted = true;
+    const result = await body(await request("POST", operation({ action: "recordAttempt", missionId: "hello", passed: 2, total: 2, category: "success", revision })));
+    revision = result.revision;
+  });
+  await Promise.resolve();
+  assert.equal(attemptStarted, false, "the completed check must not race or be discarded");
+  release();
+  await Promise.all([saveProfile, saveAttempt]);
+  const result = await body(await request("GET"));
+  assert.equal(result.revision, 2);
+  assert.equal(result.state.profile.name, "Queued learner");
+  assert.equal(result.state.attempts.length, 1);
+  assert.equal(result.state.attempts[0].missionId, "hello");
+});
+
+test("a rejected queued task does not prevent the next independent save", async () => {
+  const queue = createSerialTaskQueue();
+  const failed = queue(async () => { throw new Error("unavailable"); });
+  const next = queue(async () => "saved");
+  await assert.rejects(failed, /unavailable/);
+  assert.equal(await next, "saved");
 });
