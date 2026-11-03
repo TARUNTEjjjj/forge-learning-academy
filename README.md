@@ -42,6 +42,8 @@ Run the tests on macOS, Linux, or WSL with `python3` and a POSIX `sh`
 available on PATH. A C++20 compiler enables the optional C++ example check:
 
 ```sh
+npm test
+# equivalent to:
 node --test tests/browser-progress.test.mjs tests/curriculum.test.mjs tests/practice-models.test.mjs tests/projects.test.mjs
 ```
 
@@ -80,3 +82,8 @@ projects, privacy page, and field guide share this palette. Representative text
 color pairs meet 4.5:1 contrast; white button labels on crimson measure 4.89:1.
 Browser screenshot review was unavailable; compilation, CSS parsing, source
 review, 86 regression checks, and public asset verification passed.
+
+
+Pull requests and pushes to `main` run type checking, the Node regression suite, curriculum examples, and a production build in GitHub Actions. Same-tab progress saves are serialized: a practice result waits for an ongoing save and uses the resulting revision. Cross-tab conflicts still require review and retry rather than silently overwriting changes.
+
+Runtime compatibility note: the pinned Pyodide runtime documents module workers, but module blob workers currently fail in the reviewed WebKit opaque-origin sandbox. The existing isolated dynamic-import bootstrap remains in place and passed real Python execution during the 3 November 2026 review. Replacing it requires cross-browser verification without granting `allow-same-origin`; do not weaken that boundary as a workaround.
