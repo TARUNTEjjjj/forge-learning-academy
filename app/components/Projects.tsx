@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowUpRight, Check, Code2, Download, FolderGit2, GitBranch, Plus, RotateCcw, Save, ShieldCheck, Trash2 } from "lucide-react";
-import type { LearnerState } from "../../lib/progress";
+import { repositoryUrl, type LearnerState } from "../../lib/progress";
 import { byteLength, createProject, createProjectZip, FILE_LIMIT, normalizeSavedProject, PROJECT_LIMIT, PROJECT_TEMPLATES, projectContentEqual, validateFilePath, validateFiles, withFiles, WORKFLOW_STARTER, type ProjectDocument, type ProjectFile } from "../../lib/project-files";
 import { hasVolatileProjectDrafts, markProjectDraftSaved, parseProjectDraftSnapshot, projectDraftEpoch, readProjectDraft, readProjectDraftSnapshot, removeProjectDraft, resolveProjectDraft, saveProjectDraft, subscribeProjectDrafts } from "../../lib/draft-store";
 
@@ -38,7 +38,8 @@ function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
   const activeFile = project?.files.find(file => file.path === tab) || project?.files[0];
   const dirty = !!draft && draft.revision !== draft.savedRevision;
   const template = PROJECT_TEMPLATES.find(item => item.id === project?.templateId);
-  const validation = project ? validateFiles(project.files) || (!project.title.trim() ? "Give your project a title before saving." : "") : "";
+  const repoProblem = project ? (() => { try { repositoryUrl(project.repoUrl); return ""; } catch (reason) { return reason instanceof Error ? reason.message : "Use a GitHub repository URL."; } })() : "";
+  const validation = project ? validateFiles(project.files) || (!project.title.trim() ? "Give your project a title before saving." : "") || repoProblem : "";
 
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
@@ -57,7 +58,7 @@ function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
     if (ids.length >= PROJECT_LIMIT) { setError("This workspace has 20 projects. Export and remove a local-only draft to make room."); return; }
     const next = createProject(templateId);
     if (!edit(next)) return; setSelected(next.id); setTab("main.py"); setRemoved(null); setDiscarding(false);
-    setMessage("New project created. Edits are recovered automatically on this device.");
+    if (!hasVolatileProjectDrafts(userKey)) setMessage("New project created. Edits are recovered automatically on this device.");
   }
   function select(id: string) { setSelected(id); setTab("main.py"); setRemoved(null); setDiscarding(false); setMessage(""); setError(""); }
   function editFile(content: string) {
@@ -114,7 +115,7 @@ function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
     const persisted = removeProjectDraft(userKey, project.id);
     if (persisted) setDiscarded(project);
     setDiscarding(false); setRemoved(null);
-    setMessage(persisted ? "Local draft removed. You can restore it below during this visit." : "The browser could not remove this draft. Export it and retry before closing.");
+    setMessage(persisted ? "Local draft removed. You can restore it below while you stay on Build & contribute." : "The browser could not remove this draft. Export it and retry before closing.");
   }
   function undoDiscard() {
     if (!discarded) return;
@@ -142,7 +143,7 @@ function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
         {!signed && <p className="fine-print">Browser saving is not ready. You can still edit and download a ZIP; check the storage notice before leaving.</p>}
         {validation && <p className="project-error" role="alert">{validation}</p>}
         <div className="project-export-actions"><button className="outline" onClick={() => download(project.files)}><Download size={16}/>Download project ZIP</button><button className="text-button" onClick={() => download([...project.files, { path: ".github/workflows/test.yml", content: WORKFLOW_STARTER }], "-with-ci")}><Download size={15}/>ZIP with optional CI starter</button>{draft && <button className="text-button" disabled={busy} onClick={() => setDiscarding(true)}><Trash2 size={14}/>{saved ? "Discard local changes" : "Remove local draft"}</button>}</div>
-        {discarding && <div className="project-discard" role="group" aria-label="Confirm removal of local draft"><p>{saved ? "Return to the last saved browser copy?" : "Remove this draft from this device?"} Download a ZIP first if you want a permanent backup. You can undo until you leave this page.</p><button className="outline small" onClick={() => download(project.files)}><Download size={14}/>Download backup</button><button className="outline small" onClick={discard}>Confirm removal</button><button className="text-button" onClick={() => setDiscarding(false)}>Keep editing</button></div>}
+        {discarding && <div className="project-discard" role="group" aria-label="Confirm removal of local draft"><p>{saved ? "Return to the last saved browser copy?" : "Remove this draft from this device?"} Download a ZIP first if you want a permanent backup. You can undo while you stay on Build & contribute.</p><button className="outline small" onClick={() => download(project.files)}><Download size={14}/>Download backup</button><button className="outline small" onClick={discard}>Confirm removal</button><button className="text-button" onClick={() => setDiscarding(false)}>Keep editing</button></div>}
         <div className="callout"><GitBranch size={21}/><span><b>Ready for real Git?</b> Download your project ZIP, extract it, and open the folder in VS Code. Run the tests, then follow the steps below to publish through your own GitHub account. Add its repository URL above when you are ready.</span></div>
         <p className="fine-print">Saving here stores a copy in this browser; it does not create a GitHub commit. The optional CI starter is included in its ZIP download. Review it and run your tests before publishing.</p>
       </> : <div className="project-empty"><FolderGit2 size={36}/><p>Choose one of the three starters above. Each choice creates an independent project with editable Python, tests, README, and .gitignore files.</p></div>}
@@ -154,6 +155,7 @@ function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
 }
 
 const PROJECT_CSS = `
+.projects-page .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .projects-page .project-card:disabled{opacity:.6;cursor:not-allowed}
 .project-start{display:flex;align-items:center;gap:6px;margin-top:16px;color:#A99BFF;font-size:12px;font-weight:700}
 .project-picker,.project-description,.project-repo{display:flex;flex-direction:column;gap:8px;font-size:12px;font-weight:650;margin:18px 0}
