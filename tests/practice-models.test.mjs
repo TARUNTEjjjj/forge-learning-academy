@@ -11,8 +11,8 @@ const missionsUrl = moduleUrl(read("../lib/missions.ts"));
 const missions = await import(missionsUrl);
 const gitSource = read("../app/components/GitLab.tsx").split("export default function GitLab")[0].replace(/^import .* from .*;$/gm, "");
 const { initialGitState, runGitCommand, gitChanges } = await import(moduleUrl(gitSource));
-const practiceSource = read("../app/components/Practice.tsx").split("export default function Practice")[0].replace(/^import .* from "react";$/gm, "").replace(/^import .* from "lucide-react";$/gm, "").replace('"../../lib/missions"', JSON.stringify(missionsUrl));
-const { validateRunnerResult, resetPracticeStorage, readStore, writeStore } = await import(moduleUrl(practiceSource + "\nexport { readStore, writeStore };"));
+const practiceSource = read("../app/components/Practice.tsx").split("export default function Practice")[0].replace(/^import pythonWorkerSource .*;$/gm, "").replace(/^import .* from "react";$/gm, "").replace(/^import .* from "lucide-react";$/gm, "").replace('"../../lib/missions"', JSON.stringify(missionsUrl));
+const { validateRunnerResult, resetPracticeStorage, readStore, writeStore, disposeSandbox } = await import(moduleUrl(practiceSource + "\nexport { readStore, writeStore, disposeSandbox };"));
 const step = (state, command) => runGitCommand(state, command).state;
 const firstCommit = () => step(step(initialGitState(), "git add ."), 'git commit -m "Add tracker"');
 const edit = (state, path, content) => ({ ...state, working: { ...state.working, [path]: content } });
@@ -205,7 +205,7 @@ const SOLUTIONS = {
   "test-engineer": `def first_match(values, target):\n    left, right, answer = 0, len(values)-1, -1\n    while left <= right:\n        mid = (left+right)//2\n        if values[mid] < target: left = mid+1\n        else:\n            if values[mid] == target: answer = mid\n            right = mid-1\n    return answer`,
   capacity: `def best_plan(hours, values, budget):\n    dp = [0]*(budget+1)\n    for cost,value in zip(hours,values):\n        for b in range(budget, cost-1, -1): dp[b] = max(dp[b], dp[b-cost]+value)\n    return dp[budget]`,
 };
-const worker = read("../public/python-worker.js");
+const worker = read("../lib/python-worker.js");
 const harness = worker.match(/runPythonAsync\(`([\s\S]*?)`\)/)[1].trim().replace(/_forge_run\(\)$/, "print(_forge_run())");
 function runPython(code, functionName, cases) {
   const payload = JSON.stringify({ code, functionName, cases });
@@ -240,8 +240,39 @@ test("runner keeps expected answers outside worker and isolates app origin", () 
   assert.match(ui, /event.source !== frame\?\.contentWindow/); assert.match(ui, /event.data\?\.nonce !== nonce/);
   assert.match(ui, /cases: tests.map\(test => test.args\)/); assert.match(ui, /60000/); assert.match(ui, /8000/);
   assert.match(ui, /if \(started\) return/); assert.match(ui, /if \(!started\) return/);
-  assert.match(ui, /credentials: "same-origin"/);
-  assert.match(worker, /pyodide\/v314\.0\.1\/full\/pyodide\.mjs/);
+  assert.match(ui, /python-worker\.js\?raw/);
+  assert.match(ui, /runtime\/pyodide\/314\.0\.1\//);
+  assert.match(worker, /import\(runtimeBase \+ "pyodide\.mjs"\)/);
+  assert.ok(!ui.includes("cdn.jsdelivr.net") && !worker.includes("cdn.jsdelivr.net"));
+});
+
+test("runner waits for matching worker termination before removing its sandbox, with bounded fallback", () => {
+  const previous = { window: globalThis.window, setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout };
+  const timers = new Map(); let id = 0;
+  globalThis.window = new EventTarget();
+  globalThis.setTimeout = callback => { timers.set(++id, callback); return id; };
+  globalThis.clearTimeout = key => timers.delete(key);
+  const messages = []; let removed = 0;
+  const child = { postMessage: (...args) => messages.push(args) };
+  const frame = { contentWindow: child, remove: () => removed++ };
+  const message = (source, data) => { const event = new Event("message"); Object.assign(event, { source, data }); window.dispatchEvent(event); };
+  try {
+    disposeSandbox(frame, "first-run");
+    assert.deepEqual(messages, [[{ type: "stop", nonce: "first-run" }, "*"]]);
+    assert.equal(removed, 0);
+    message({}, { nonce: "first-run", stopped: true });
+    message(child, { nonce: "old-run", stopped: true });
+    assert.equal(removed, 0);
+    message(child, { nonce: "first-run", stopped: true });
+    assert.equal(removed, 1); assert.equal(timers.size, 0);
+    message(child, { nonce: "first-run", stopped: true });
+    assert.equal(removed, 1);
+    disposeSandbox(frame, "second-run");
+    [...timers.values()][0]();
+    assert.equal(removed, 2); assert.equal(timers.size, 0);
+    message(child, { nonce: "second-run", stopped: true });
+    assert.equal(removed, 2);
+  } finally { Object.assign(globalThis, previous); }
 });
 
 

@@ -1,0 +1,34 @@
+{
+  "package": "pyodide",
+  "version": "314.0.1",
+  "python": "3.14.2",
+  "emscripten": "5.0.3",
+  "source": "https://github.com/pyodide/pyodide/tree/314.0.1",
+  "files": [
+    {
+      "name": "pyodide.mjs",
+      "bytes": 17880,
+      "sha256": "eebea168d235f45d1aa8a187c6da597b48ebd707126bab7caecbc2182463e9bc"
+    },
+    {
+      "name": "pyodide.asm.mjs",
+      "bytes": 1250305,
+      "sha256": "659089c428cc2dbb00e94dc52b83f8b8ece03144e2ad553f9f10ee43f8504138"
+    },
+    {
+      "name": "pyodide.asm.wasm",
+      "bytes": 9609879,
+      "sha256": "9d0827318cd26218749ab15d5a04e1fd3669d96d86dc9f58dd62e38e214358d9"
+    },
+    {
+      "name": "python_stdlib.zip",
+      "bytes": 2552455,
+      "sha256": "7d1b4a2dbc7a58f3d4371ab39d8437709e50bc20fa1b83778e425e812e3696ba"
+    },
+    {
+      "name": "pyodide-lock.json",
+      "bytes": 115407,
+      "sha256": "f545248ab161ead36adf7110a358334974e97b08f40c7219e97077d380f7247b"
+    }
+  ]
+}
