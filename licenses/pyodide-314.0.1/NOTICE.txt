@@ -1,0 +1,47 @@
+Pyodide 314.0.1 runtime distributed unchanged by Forge.
+
+Upstream corresponding source: https://github.com/pyodide/pyodide/tree/314.0.1
+Pyodide is licensed under the Mozilla Public License 2.0.
+The runtime also contains CPython 3.14.2, Emscripten 5.0.3 and third-party
+components; their individual license notices are included in this directory.
+No optional packages listed in pyodide-lock.json are distributed here.
+
+This is an unchanged redistribution of the five core assets from the npm
+package pyodide@314.0.1. The included manifest pins their SHA-256 hashes.
+Corresponding Source Code Form for the MPL-covered runtime is available
+under MPL-2.0 from the exact source tag above, including its build scripts
+and CPython patches. The hiwire source is also MPL-2.0 and is available at
+https://github.com/pyodide/hiwire/tree/6a1e67280a15d929ebeceee54a6358c9c8d5f697
+
+License documents and the identified HACL license header are copied verbatim
+from the upstream versions below;
+sources.json records each document's exact URL and SHA-256 digest.
+
+* Pyodide 314.0.1 and hiwire: Mozilla Public License 2.0.
+* CPython 3.14.2: Python Software Foundation License 2 and historical
+  Python licenses. PYTHON-THIRD-PARTY-NOTICES.rst reproduces Python's
+  additional notices (including libmpdec and other bundled components).
+  Some notices describe optional upstream components not used by Forge;
+  inclusion of a notice does not mean its optional feature is available.
+* Emscripten 5.0.3 JavaScript runtime: MIT / University of Illinois NCSA;
+  musl libc: its included MIT-style and component-specific notices.
+* LLVM libc++, libc++abi and compiler-rt from Emscripten 5.0.3: Apache-2.0
+  with LLVM exceptions and the historical licenses in their documents.
+* libffi, commit f08493d249d2067c8b3207ba46693dd858f95db3: MIT.
+* Expat and HACL* hashing code bundled with CPython 3.14.2: MIT.
+* zlib 1.3.1: zlib license; bzip2 1.0.6: its BSD-style license.
+* Zstandard 1.5.7: BSD-3-Clause (the included license option).
+* liblzma from XZ Utils 5.2.2: public domain, as explained in XZ-COPYING.txt.
+  Pyodide builds liblzma only, with the XZ command-line tools and scripts
+  disabled; those separate GPL/LGPL tools are not shipped by Forge.
+* SQLite 3.39.0: public domain. Upstream dedication and explanation:
+  https://www.sqlite.org/copyright.html
+
+Build provenance:
+https://github.com/pyodide/pyodide/blob/314.0.1/Makefile.envs
+https://github.com/pyodide/pyodide/blob/314.0.1/cpython/Makefile
+https://github.com/emscripten-core/emscripten/blob/5.0.3/tools/ports/zlib.py
+https://github.com/emscripten-core/emscripten/blob/5.0.3/tools/ports/bzip2.py
+
+These components retain their own licenses. Forge does not relicense the
+combined runtime under MIT or claim ownership of upstream runtime code.
