@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowRight, BookOpen, Check, CheckCircle2, ChevronDown, Clock3, Code2, Lightbulb, Loader2, Play, RotateCcw, Square, Terminal, XCircle } from "lucide-react";
+import pythonWorkerSource from "../../lib/python-worker.js?raw";
 import { MISSIONS, isJsonValue, jsonEqual, type JsonValue, type Mission } from "../../lib/missions";
 
 export type PracticeResult = { missionId: string; passed: number; total: number; category: string };
@@ -46,17 +47,6 @@ function completedIds(raw: string): string[] {
   try { const value: unknown = JSON.parse(raw); return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string" && MISSIONS.some(m => m.id === id)) : []; } catch { return []; }
 }
 
-let sourcePromise: Promise<string> | undefined;
-function workerSource() {
-  if (!sourcePromise) sourcePromise = fetch("/python-worker.js", { credentials: "same-origin" }).then(async response => {
-    if (!response.ok) throw new Error("The Python runner file could not be loaded. Please retry.");
-    const text = await response.text();
-    if (text.length > 100000 || !text.includes("loadPyodide")) throw new Error("The Python runner was unavailable. Please retry.");
-    return text;
-  }).catch(error => { sourcePromise = undefined; throw error; });
-  return sourcePromise;
-}
-
 export function validateRunnerResult(value: unknown, count: number): value is { results: CaseResult[]; error: string | null } {
   if (typeof value !== "object" || value === null) return false;
   const data = value as Record<string, unknown>;
@@ -69,30 +59,43 @@ export function validateRunnerResult(value: unknown, count: number): value is { 
 function safeScript(value: unknown) { return JSON.stringify(value).replace(/</g, "\\u003c"); }
 
 /** An opaque sandbox keeps learner code away from app cookies, storage, and authenticated APIs. */
-function sandboxDocument(source: string, nonce: string) {
-  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net/pyodide/v314.0.1/full/; worker-src blob:; connect-src https://cdn.jsdelivr.net/pyodide/v314.0.1/full/;"></head><body><script>
+function sandboxDocument(source: string, nonce: string, runtimeBase: string) {
+  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' blob: ${runtimeBase}; worker-src blob:; connect-src ${runtimeBase};"></head><body><script>
 const nonce = ${safeScript(nonce)};
 window.addEventListener('securitypolicyviolation', event => parent.postMessage({nonce, data:{type:'error', message:'Python runtime asset was blocked by the browser policy: ' + event.violatedDirective + ' (' + event.blockedURI + ').'}}, '*'));
 const url = URL.createObjectURL(new Blob([${safeScript(source)}], {type:'text/javascript'}));
 let worker;
 let readyForwarded = false;
 let resultForwarded = false;
+const stop = () => { worker?.terminate(); URL.revokeObjectURL(url); };
 try {
   worker = new Worker(url);
   worker.onmessage = event => {
     const data = event.data;
     if (!data || typeof data !== 'object' || resultForwarded) return;
     if (data.type === 'ready' && !readyForwarded) { readyForwarded = true; parent.postMessage({nonce, data}, '*'); }
-    else if (data.type === 'error' || (data.type === 'result' && readyForwarded)) { resultForwarded = true; parent.postMessage({nonce, data}, '*'); }
+    else if (data.type === 'error' || (data.type === 'result' && readyForwarded)) { resultForwarded = true; stop(); parent.postMessage({nonce, data}, '*'); }
   };
   worker.onerror = event => parent.postMessage({nonce, data:{type:'error', message:'The Python environment could not start. Check your connection and browser support, then retry.' + (event.message ? ' ' + String(event.message).slice(0,300) : '')}}, '*');
   window.addEventListener('message', event => {
     if (event.source !== parent || event.data?.nonce !== nonce) return;
-    if (event.data.type === 'stop') { worker.terminate(); URL.revokeObjectURL(url); }
+    if (event.data.type === 'stop') { stop(); parent.postMessage({nonce, stopped:true}, '*'); }
     if (event.data.type === 'run') worker.postMessage(event.data.payload);
   });
 } catch(error) { parent.postMessage({nonce, data:{type:'error', message:String(error).slice(0,500)}}, '*'); }
 <\/script></body></html>`;
+}
+
+/** Let the sandbox acknowledge termination before discarding its message queue. */
+function disposeSandbox(frame: HTMLIFrameElement, nonce: string) {
+  const child = frame.contentWindow;
+  const remove = () => { clearTimeout(timer); window.removeEventListener("message", stopped); frame.remove(); };
+  const stopped = (event: MessageEvent) => {
+    if (event.source === child && event.data?.nonce === nonce && event.data.stopped === true) remove();
+  };
+  const timer = setTimeout(remove, 1000);
+  window.addEventListener("message", stopped);
+  child?.postMessage({ type: "stop", nonce }, "*");
 }
 
 function passedCase(result: CaseResult | undefined, expected: JsonValue, mission: Mission) {
@@ -169,7 +172,7 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
       settled = true;
       if (timer) clearTimeout(timer);
       if (listener) window.removeEventListener("message", listener);
-      if (frame) { frame.contentWindow?.postMessage({ type: "stop", nonce }, "*"); frame.remove(); }
+      if (frame) { disposeSandbox(frame, nonce); frame = undefined; }
     };
     cleanup.current = dispose;
     const fail = (message: string, performance = false) => {
@@ -180,7 +183,8 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
     };
     timer = setTimeout(() => fail("Python took too long to load. Check your connection, then retry. Your code is still here."), 60000);
     try {
-      const source = await workerSource();
+      const runtimeBase = new URL("/runtime/pyodide/314.0.1/", window.location.href).href;
+      const source = `const runtimeBase = ${safeScript(runtimeBase)};\n${pythonWorkerSource}`;
       if (serial !== runSerial.current || settled) return;
       frame = document.createElement("iframe");
       frame.setAttribute("sandbox", "allow-scripts"); frame.setAttribute("aria-hidden", "true"); frame.setAttribute("title", "Isolated Python execution"); frame.style.display = "none";
@@ -218,7 +222,7 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
         }
       };
       window.addEventListener("message", listener);
-      frame.srcdoc = sandboxDocument(source, nonce);
+      frame.srcdoc = sandboxDocument(source, nonce, runtimeBase);
       document.body.appendChild(frame);
     } catch (error) { fail(error instanceof Error ? error.message : "The Python environment could not start. Please retry."); }
   }

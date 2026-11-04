@@ -1,3 +1,5 @@
+// Compatibility bootstrap for tabs opened before the self-hosted runtime update.
+// Current bundles embed lib/python-worker.js instead. Reload an older tab to use it.
 // Pinned to the version documented at https://pyodide.org/en/314.0.1/usage/webworker.html.
 // Runs only inside an opaque-origin sandbox iframe. Never pass credentials to this worker.
 // A classic blob bootstrap dynamically imports the ES-module runtime: unlike a module
