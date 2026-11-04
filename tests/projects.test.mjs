@@ -78,6 +78,25 @@ test("ZIP exports preserve directories and Unicode and can be read by standard P
   assert.throws(()=>createProjectZip([{path:"../escape.txt",content:"x"}]),/parent|relative/);
 });
 
+test("file-folder collisions are rejected before creating an unextractable ZIP", () => {
+  for (const paths of [["src", "src/utils.py"], ["src/utils.py", "src"], ["Src", "src/utils.py"], ["a/b", "a/b/c.py"]]) {
+    const entries = paths.map(path => ({ path, content: "" }));
+    assert.match(files.validateFileHierarchy(entries), /already a file/);
+    assert.throws(() => createProjectZip(entries), /already a file/);
+  }
+  const valid = [{ path: "src/utils.py", content: "" }, { path: "src/tests/math.py", content: "" }, { path: "src.py", content: "" }];
+  assert.equal(files.validateFileHierarchy(valid), null);
+  assert.doesNotThrow(() => createProjectZip(valid));
+});
+
+test("previously stored colliding paths remain recoverable so learners can fix or remove them", () => {
+  const user = scope("legacy-hierarchy");
+  const existing = withFiles(project("legacy-hierarchy"), [{ path: "main.py", content: "print(42)" }, { path: "src", content: "keep my notes" }, { path: "src/utils.py", content: "value = 42" }]);
+  store.saveProjectDraft(user, existing);
+  assert.deepEqual(store.readProjectDraft(user, existing.id).project.files, existing.files);
+  assert.equal(files.validProjectDocument(existing), true);
+});
+
 test("account-scoped recovery preserves independent project instances", () => {
   const alice=scope("alice"), bob=scope("bob"); const one=project("one"),two=project("two");
   store.saveProjectDraft(alice,one);store.saveProjectDraft(alice,two);store.saveProjectDraft(bob,editTitle(one,"Bob"));

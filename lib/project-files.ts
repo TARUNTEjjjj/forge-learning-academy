@@ -20,6 +20,19 @@ export function validateFilePath(path: string, allowWorkflow = false): string | 
   return null;
 }
 
+/** A ZIP cannot extract a regular file and a folder at the same path. */
+export function validateFileHierarchy(files: Pick<ProjectFile, "path">[]): string | null {
+  const paths = new Set(files.map(file => file.path.toLowerCase()));
+  for (const file of files) {
+    const segments = file.path.split("/");
+    for (let end = 1; end < segments.length; end++) {
+      const parent = segments.slice(0, end).join("/");
+      if (paths.has(parent.toLowerCase())) return `“${parent}” is already a file. Use a different folder name or remove that file before adding nested files.`;
+    }
+  }
+  return null;
+}
+
 export function validateFiles(files: unknown): string | null {
   if (!Array.isArray(files) || files.length < 1 || files.length > FILE_LIMIT) return `A project needs 1–${FILE_LIMIT} files.`;
   const seen = new Set<string>(); let total = 0;
@@ -64,6 +77,7 @@ export function crc32(bytes: Uint8Array): number {
 /** Stored ZIP entries preserve nested paths and UTF-8 text without compression dependencies. */
 export function createProjectZip(files: ProjectFile[]): Uint8Array<ArrayBuffer> {
   if (files.length < 1 || files.length > FILE_LIMIT + 1) throw new Error("The archive contains too many files.");
+  const hierarchyError = validateFileHierarchy(files); if (hierarchyError) throw new Error(hierarchyError);
   const seen = new Set<string>(); let total = 0;
   const entries = files.map(file => {
     const error = validateFilePath(file.path, true); if (error) throw new Error(error);

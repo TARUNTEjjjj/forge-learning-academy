@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowUpRight, Check, Code2, Download, FolderGit2, GitBranch, Plus, RotateCcw, Save, ShieldCheck, Trash2 } from "lucide-react";
 import { repositoryUrl, type LearnerState } from "../../lib/progress";
-import { byteLength, createProject, createProjectZip, FILE_LIMIT, normalizeSavedProject, PROJECT_LIMIT, PROJECT_TEMPLATES, projectContentEqual, validateFilePath, validateFiles, withFiles, WORKFLOW_STARTER, type ProjectDocument, type ProjectFile } from "../../lib/project-files";
+import { byteLength, createProject, createProjectZip, FILE_LIMIT, normalizeSavedProject, PROJECT_LIMIT, PROJECT_TEMPLATES, projectContentEqual, validateFileHierarchy, validateFilePath, validateFiles, withFiles, WORKFLOW_STARTER, type ProjectDocument, type ProjectFile } from "../../lib/project-files";
 import { hasVolatileProjectDrafts, markProjectDraftSaved, parseProjectDraftSnapshot, projectDraftEpoch, readProjectDraft, readProjectDraftSnapshot, removeProjectDraft, resolveProjectDraft, saveProjectDraft, subscribeProjectDrafts } from "../../lib/draft-store";
 
 type SavedProject = LearnerState["projects"][number];
@@ -74,17 +74,20 @@ function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
     if (problem) { setError(problem); return; }
     if (project.files.some(file => file.path.toLowerCase() === path.toLowerCase())) { setError("A file with that name already exists."); return; }
     if (project.files.length >= FILE_LIMIT) { setError("A project supports up to 12 files."); return; }
-    edit(withFiles(project, [...project.files, { path, content: "" }])); setTab(path); setNewPath("");
+    const files = [...project.files, { path, content: "" }];
+    const hierarchyError = validateFileHierarchy(files);
+    if (hierarchyError) { setError(hierarchyError); return; }
+    if (edit(withFiles(project, files))) { setTab(path); setNewPath(""); }
   }
   function removeFile() {
     if (!project || !activeFile || activeFile.path === "main.py") return;
-    setRemoved(activeFile); edit(withFiles(project, project.files.filter(file => file.path !== activeFile.path))); setTab("main.py");
+    if (edit(withFiles(project, project.files.filter(file => file.path !== activeFile.path)))) { setRemoved(activeFile); setTab("main.py"); }
   }
   function restoreFile() {
     if (!project || !removed) return;
-    const files = [...project.files, removed]; const problem = validateFiles(files);
+    const files = [...project.files, removed]; const problem = validateFiles(files) || validateFileHierarchy(files);
     if (problem) { setError(problem); return; }
-    edit(withFiles(project, files)); setTab(removed.path); setRemoved(null);
+    if (edit(withFiles(project, files))) { setTab(removed.path); setRemoved(null); }
   }
   async function save() {
     if (!project || busy || validation || !signed) return;
