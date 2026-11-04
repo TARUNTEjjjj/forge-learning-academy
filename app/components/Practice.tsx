@@ -139,7 +139,7 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
   }
   function focusEditorAfterRemoval() {
     const active = document.activeElement;
-    if (active instanceof HTMLElement && (active.closest(".lab-feedback") || active.closest(".lab-stop"))) editorRef.current?.focus();
+    if (active instanceof HTMLElement && active.matches(":focus-visible") && (active.closest(".lab-feedback") || active.closest(".lab-stop"))) editorRef.current?.focus();
   }
   function selectMission(id: string) {
     focusEditorAfterRemoval();
