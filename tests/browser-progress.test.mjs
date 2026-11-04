@@ -195,7 +195,7 @@ test("the default adapter is importable without a browser and fails clearly when
 });
 
 
-test("a completed practice check waits for an in-flight profile save and uses its revision", async () => {
+test("the serial task queue makes a completed practice check wait for an in-flight profile save and use its revision", async () => {
   const { request } = fixture();
   const queue = createSerialTaskQueue();
   let revision = 0;
@@ -233,4 +233,25 @@ test("a rejected queued task does not prevent the next independent save", async 
   const next = queue(async () => "saved");
   await assert.rejects(failed, /unavailable/);
   assert.equal(await next, "saved");
+});
+
+test("Forge sends saves through the serial queue at the latest revision and practice handlers repair focus before removing a control", () => {
+  const forge = read("../app/components/Forge.tsx");
+  assert.ok(forge.includes("saveQueue.current(()=>mutationRef.current(fields))"), "mutate must queue a save instead of rejecting one that arrives during another save");
+  assert.ok(forge.includes("revision:revisionRef.current"), "a queued save must use the revision left by the save before it");
+  const practice = read("../app/components/Practice.tsx");
+  assert.ok(practice.includes('active.matches(":focus-visible")'), "focus must move to the editor only when the removed control had keyboard focus");
+  const between = (start, end) => {
+    const from = practice.indexOf(start), to = practice.indexOf(end, from + start.length);
+    assert.ok(from >= 0 && to > from, `Practice.tsx no longer has ${start} followed by ${end}`);
+    return practice.slice(from, to);
+  };
+  const handlers = {
+    selectMission: between("function selectMission(", "function cancel("),
+    cancel: between("function cancel(", "async function run("),
+    "the start of run": between("async function run(", "const nonce"),
+    fail: between("const fail =", "timer = setTimeout("),
+    "the result branch": between('data.type === "result"', 'window.addEventListener("message", listener)'),
+  };
+  for (const [name, body] of Object.entries(handlers)) assert.ok(body.includes("focusEditorAfterRemoval();"), `${name} must call focusEditorAfterRemoval()`);
 });
