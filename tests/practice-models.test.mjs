@@ -178,6 +178,16 @@ test("branch validation prevents prototype names and invalid refs", () => {
   let state = step(firstCommit(), "git branch feature"); state = step(state, "git branch feature/sub"); assert.ok(!state.branches["feature/sub"]);
 });
 
+test("branch validation rejects names git refuses: HEAD and .lock path components", () => {
+  // git check-ref-format --branch rejects these; a branch named HEAD would also mislabel HEAD in git log.
+  for (const command of ["git branch HEAD", "git switch -c HEAD", "git branch a.lock/b"]) {
+    const result = runGitCommand(firstCommit(), command);
+    assert.deepEqual(Object.keys(result.state.branches), ["main"], command); assert.equal(result.state.branch, "main", command);
+    assert.match(result.output, /Use a short branch name/, command);
+  }
+  assert.ok(step(firstCommit(), "git branch feature/HEAD").branches["feature/HEAD"], "only the exact name HEAD is reserved");
+});
+
 test("network commands explicitly explain simulation boundary", () => {
   for (const command of ["git push", "git clone url", "git fetch", "git pull"]) assert.match(runGitCommand(initialGitState(), command).output, /no remote repository/);
 });

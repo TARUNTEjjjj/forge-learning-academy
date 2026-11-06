@@ -42,7 +42,7 @@ function makeCommit(state: GitState, message: string, parents = [state.branches[
   return id;
 }
 function validBranch(name: string) {
-  return /^[a-zA-Z0-9][a-zA-Z0-9_./-]{0,49}$/.test(name) && !name.includes("..") && !name.includes("//") && !name.endsWith("/") && !name.endsWith(".") && !name.endsWith(".lock") && name.split("/").every(part => !part.startsWith("."));
+  return /^[a-zA-Z0-9][a-zA-Z0-9_./-]{0,49}$/.test(name) && name !== "HEAD" && !name.includes("..") && !name.includes("//") && !name.endsWith("/") && !name.endsWith(".") && name.split("/").every(part => !part.startsWith(".") && !part.endsWith(".lock"));
 }
 function parseCommand(command: string): string[] | null {
   const parts: string[] = []; let word = ""; let quote = ""; let escaped = false; let started = false;
