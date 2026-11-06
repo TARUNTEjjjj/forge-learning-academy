@@ -124,6 +124,24 @@ test("merge abort restores the receiving branch without history loss", () => {
   assert.equal(after.commits.length, before.commits.length); assert.deepEqual(gitChanges(after), { staged: [], changed: [], untracked: [] });
 });
 
+test("merge base is the nearest common ancestor, so an older one cannot undo a committed revert", () => {
+  // Matches `git merge-base`: O is closer by path length but is an ancestor of L, the real base.
+  const original = initialGitState().working["README.md"];
+  let state = step(firstCommit(), "git branch q");
+  state = commitEdit(state, "README.md", "L\n"); const base = state.branches.main;
+  state = step(step(state, "git branch tb"), "git switch -c ub");
+  for (const text of ["p1\n", "p2\n", "p3\n"]) state = commitEdit(state, "tracker.py", text);
+  state = commitEdit(step(state, "git switch q"), "tracker.py", "p3\n");
+  state = step(step(state, "git switch ub"), "git merge q");
+  state = commitEdit(state, "README.md", original);
+  state = commitEdit(step(state, "git switch tb"), "tracker.py", "p3\n");
+  const ours = step(state, "git switch ub").branches.ub, theirs = state.branches.tb;
+  state = step(step(state, "git switch ub"), "git merge tb");
+  assert.deepEqual(current(state).parents, [ours, theirs]); assert.equal(state.merge, null);
+  assert.equal(state.working["README.md"], original, `merge base should be ${base}; the revert must survive`);
+  assert.equal(state.working["tracker.py"], "p3\n");
+});
+
 test("merging an included ancestor is a no-op", () => {
   let state = step(firstCommit(), "git branch older"); state = commitEdit(state, "README.md", "New readme");
   const result = runGitCommand(state, "git merge older"); assert.deepEqual(result.state, state); assert.match(result.output, /Already up to date/);
