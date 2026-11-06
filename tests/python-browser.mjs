@@ -8,7 +8,9 @@
  * FORGE_BROWSER_REPORT=/absolute/path/to/report.json node tests/python-browser.mjs
  *
  * Optional FORGE_BLOCK_CDN=1 adds a separate external-CDN-blocked run. Routing
- * disables browser HTTP caching, so that context is excluded from cache evidence.
+ * disables browser HTTP caching, so that context runs separately. No context is
+ * runtime cache evidence: the opaque-origin sandbox bypasses the HTTP cache, so
+ * Chrome downloads the runtime on every run.
  */
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';

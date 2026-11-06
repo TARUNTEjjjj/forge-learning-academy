@@ -274,6 +274,16 @@ test("runner keeps expected answers outside worker and isolates app origin", () 
   assert.ok(!ui.includes("cdn.jsdelivr.net") && !worker.includes("cdn.jsdelivr.net"));
 });
 
+test("runtime copy does not promise a cached download that the opaque sandbox cannot reuse", () => {
+  // Requests from the allow-scripts-only sandbox come from an opaque origin, so Chrome never serves
+  // the runtime from its HTTP cache: every run downloads it again and needs a connection.
+  assert.match(read("../app/components/Practice.tsx"), /setAttribute\("sandbox", "allow-scripts"\)/);
+  const claim = (path, pattern) => read(path).match(pattern)?.[0];
+  assert.equal(claim("../app/components/Practice.tsx", /[^."]*first[- ]run[^."]*/gi), undefined);
+  assert.equal(claim("../public/privacy.html", /[^.>]*cache[^.]*for later runs/gi), undefined);
+  assert.equal(claim("../docs/python-runtime.md", /[^.]*first load[^.]*/gi), undefined);
+});
+
 test("runner waits for matching worker termination before removing its sandbox, with bounded fallback", () => {
   const previous = { window: globalThis.window, setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout };
   const timers = new Map(); let id = 0;

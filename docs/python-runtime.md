@@ -3,8 +3,9 @@
 Forge serves the unmodified **Pyodide 314.0.1** core runtime from
 `/runtime/pyodide/314.0.1/`. Python code executes locally in a fresh worker
 inside an opaque sandbox. Hosting these static files does not add a server
-interpreter or a paid API. The first load still requires a network connection;
-browser caching is an optimization, not an offline-availability guarantee.
+interpreter or a paid API. Every run needs a network connection: the runner's
+requests come from the sandbox's opaque origin, so Chrome downloads the runtime
+again for each run (about 6 MB compressed) instead of reusing its HTTP cache.
 
 `npm ci` obtains the exact dev dependency from the committed npm lockfile.
 `npm run dev` and `npm run build` automatically run `stage:python` first.
@@ -34,7 +35,8 @@ The largest asset is below Cloudflare Pages' 25 MiB individual asset limit.
 The site uses static Pages hosting; no Worker, R2 bucket or paid runtime
 binding is required to serve these files. The existing `_headers` gives only
 this public runtime path CORS access for the opaque sandbox, immutable
-versioned caching and JavaScript/WebAssembly MIME types.
+versioned caching and JavaScript/WebAssembly MIME types. The caching rule does
+not help the current runner, whose opaque-origin requests bypass the cache.
 
 ## Attribution and corresponding source
 

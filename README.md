@@ -90,6 +90,8 @@ blocks jsDelivr to verify that the current app has no runtime dependency on it.
 The runner checks saved scores, preserved drafts, sandbox cleanup and complete
 runtime responses; it never substitutes a fake interpreter. Routing is disabled
 for the main repeat tests, because Playwright routing disables HTTP caching.
+Repeated runs are still not cache evidence: requests from the opaque-origin
+sandbox bypass the HTTP cache, so Chrome downloads the runtime on every run.
 Run against a preview before publishing production.
 
 `public/python-worker.js` remains as a compatibility endpoint for tabs opened
