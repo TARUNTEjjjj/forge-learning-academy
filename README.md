@@ -67,9 +67,9 @@ free under Cloudflare's published Pages pricing; no paid domain was purchased.
 
 ## Verification
 
-The current build passes TypeScript, Vite and 93 automated checks covering
-curriculum, Python/Git models, persistence, project exports, runner cleanup and
-pinned runtime integrity. The Python runtime is unchanged upstream code; its
+The current build passes TypeScript, Vite and the automated `npm test` checks
+covering curriculum, Python/Git models, persistence, project exports, runner
+cleanup and pinned runtime integrity. The Python runtime is unchanged upstream code; its
 hosting and startup path changed. See [runtime provenance](docs/python-runtime.md).
 
 The real-browser regression uses an installed Playwright Core and Chrome. Serve
