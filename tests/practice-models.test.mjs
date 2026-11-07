@@ -124,6 +124,24 @@ test("merge abort restores the receiving branch without history loss", () => {
   assert.equal(after.commits.length, before.commits.length); assert.deepEqual(gitChanges(after), { staged: [], changed: [], untracked: [] });
 });
 
+test("merge base is the nearest common ancestor, so an older one cannot undo a committed revert", () => {
+  // Matches `git merge-base`: O is closer by path length but is an ancestor of L, the real base.
+  const original = initialGitState().working["README.md"];
+  let state = step(firstCommit(), "git branch q");
+  state = commitEdit(state, "README.md", "L\n"); const base = state.branches.main;
+  state = step(step(state, "git branch tb"), "git switch -c ub");
+  for (const text of ["p1\n", "p2\n", "p3\n"]) state = commitEdit(state, "tracker.py", text);
+  state = commitEdit(step(state, "git switch q"), "tracker.py", "p3\n");
+  state = step(step(state, "git switch ub"), "git merge q");
+  state = commitEdit(state, "README.md", original);
+  state = commitEdit(step(state, "git switch tb"), "tracker.py", "p3\n");
+  const ours = step(state, "git switch ub").branches.ub, theirs = state.branches.tb;
+  state = step(step(state, "git switch ub"), "git merge tb");
+  assert.deepEqual(current(state).parents, [ours, theirs]); assert.equal(state.merge, null);
+  assert.equal(state.working["README.md"], original, `merge base should be ${base}; the revert must survive`);
+  assert.equal(state.working["tracker.py"], "p3\n");
+});
+
 test("merging an included ancestor is a no-op", () => {
   let state = step(firstCommit(), "git branch older"); state = commitEdit(state, "README.md", "New readme");
   const result = runGitCommand(state, "git merge older"); assert.deepEqual(result.state, state); assert.match(result.output, /Already up to date/);
@@ -158,6 +176,16 @@ test("branch validation prevents prototype names and invalid refs", () => {
     const state = step(initialGitState(), `git branch ${name}`); assert.deepEqual(Object.keys(state.branches), ["main"]);
   }
   let state = step(firstCommit(), "git branch feature"); state = step(state, "git branch feature/sub"); assert.ok(!state.branches["feature/sub"]);
+});
+
+test("branch validation rejects names git refuses: HEAD and .lock path components", () => {
+  // git check-ref-format --branch rejects these; a branch named HEAD would also mislabel HEAD in git log.
+  for (const command of ["git branch HEAD", "git switch -c HEAD", "git branch a.lock/b"]) {
+    const result = runGitCommand(firstCommit(), command);
+    assert.deepEqual(Object.keys(result.state.branches), ["main"], command); assert.equal(result.state.branch, "main", command);
+    assert.match(result.output, /Use a short branch name/, command);
+  }
+  assert.ok(step(firstCommit(), "git branch feature/HEAD").branches["feature/HEAD"], "only the exact name HEAD is reserved");
 });
 
 test("network commands explicitly explain simulation boundary", () => {
@@ -244,6 +272,16 @@ test("runner keeps expected answers outside worker and isolates app origin", () 
   assert.match(ui, /runtime\/pyodide\/314\.0\.1\//);
   assert.match(worker, /import\(runtimeBase \+ "pyodide\.mjs"\)/);
   assert.ok(!ui.includes("cdn.jsdelivr.net") && !worker.includes("cdn.jsdelivr.net"));
+});
+
+test("runtime copy does not promise a cached download that the opaque sandbox cannot reuse", () => {
+  // Requests from the allow-scripts-only sandbox come from an opaque origin, so Chrome never serves
+  // the runtime from its HTTP cache: every run downloads it again and needs a connection.
+  assert.match(read("../app/components/Practice.tsx"), /setAttribute\("sandbox", "allow-scripts"\)/);
+  const claim = (path, pattern) => read(path).match(pattern)?.[0];
+  assert.equal(claim("../app/components/Practice.tsx", /[^."]*first[- ]run[^."]*/gi), undefined);
+  assert.equal(claim("../public/privacy.html", /[^.>]*cache[^.]*for later runs/gi), undefined);
+  assert.equal(claim("../docs/python-runtime.md", /[^.]*first load[^.]*/gi), undefined);
 });
 
 test("runner waits for matching worker termination before removing its sandbox, with bounded fallback", () => {

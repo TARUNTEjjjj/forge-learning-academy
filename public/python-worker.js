@@ -6,17 +6,31 @@
 // blob worker, this also starts inside WebKit's opaque-origin sandbox. No importScripts.
 let output = "";
 const send = self.postMessage.bind(self);
+// Capture raw writes: Pyodide's line-batched stdout/stderr callbacks drop text printed
+// without a trailing newline. Output stays bounded to 4000 characters.
+const capture = () => {
+  const decoder = new TextDecoder();
+  return { write: (buffer) => { if (output.length < 4000) output += decoder.decode(buffer, { stream: true }).slice(0, 4000 - output.length); return buffer.length; } };
+};
 const ready = import("https://cdn.jsdelivr.net/pyodide/v314.0.1/full/pyodide.mjs").then(({ loadPyodide }) => loadPyodide({
   indexURL: "https://cdn.jsdelivr.net/pyodide/v314.0.1/full/",
-  stdout: (line) => { if (output.length < 4000) output += String(line).slice(0, 4000 - output.length) + "\n"; },
-  stderr: (line) => { if (output.length < 4000) output += String(line).slice(0, 4000 - output.length) + "\n"; },
-}));
-
-ready.then(() => send({ type: "ready" })).catch((error) => {
-  send({ type: "error", message: "Python could not load. Check your connection and allow the Pyodide CDN, then try again. " + String(error).slice(0, 300) });
+})).then((pyodide) => {
+  pyodide.setStdout(capture());
+  pyodide.setStderr(capture());
+  return pyodide;
 });
 
+const loadFailed = (error) => send({ type: "error", message: "Python could not load. Check your connection and allow the Pyodide CDN, then try again. " + String(error).slice(0, 300) });
+ready.then(() => send({ type: "ready" })).catch(loadFailed);
+
 let used = false;
+// A fatal interpreter error (for example os._exit() or a JavaScript stack overflow) never
+// settles runPythonAsync and surfaces only as an unhandled rejection, as can a runtime file
+// that fails to download. Report it at once instead of waiting for a time limit.
+self.addEventListener("unhandledrejection", (event) => {
+  if (!used) { loadFailed(event.reason); return; }
+  send({ type: "error", message: "Python stopped unexpectedly: " + String(event.reason).slice(0, 300) + ". Your code is still here. os._exit() or very deep recursion can cause this; change the code, then try again.", output: output.slice(0, 4000) });
+});
 self.onmessage = async (event) => {
   if (used) return;
   const payload = event.data;
@@ -31,10 +45,11 @@ self.onmessage = async (event) => {
     pyodide.globals.set("__forge_payload", JSON.stringify({ code: payload.code, functionName: payload.functionName, cases: payload.cases }));
     const raw = await pyodide.runPythonAsync(`
 import json as _forge_json
+import sys as _forge_sys
 import traceback as _forge_traceback
 import copy as _forge_copy
 
-def _forge_run():
+def _forge_check():
     data = _forge_json.loads(__forge_payload)
     namespace = {"__name__": "__learner__"}
     result = {"results": [], "error": None}
@@ -61,6 +76,17 @@ def _forge_run():
         except BaseException as error:
             result["results"].append({"value": None, "error": type(error).__name__ + ": " + str(error)[:500], "mutated": False})
     return _forge_json.dumps(result, allow_nan=False)
+
+def _forge_run():
+    try:
+        return _forge_check()
+    finally:
+        # Like CPython at exit, flush text that is still buffered without a final newline.
+        for stream in (_forge_sys.stdout, _forge_sys.stderr, _forge_sys.__stdout__, _forge_sys.__stderr__):
+            try:
+                stream.flush()
+            except BaseException:
+                pass
 
 _forge_run()
 `);

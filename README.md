@@ -67,9 +67,9 @@ free under Cloudflare's published Pages pricing; no paid domain was purchased.
 
 ## Verification
 
-The current build passes TypeScript, Vite and 93 automated checks covering
-curriculum, Python/Git models, persistence, project exports, runner cleanup and
-pinned runtime integrity. The Python runtime is unchanged upstream code; its
+The current build passes TypeScript, Vite and the automated `npm test` checks
+covering curriculum, Python/Git models, persistence, project exports, runner
+cleanup and pinned runtime integrity. The Python runtime is unchanged upstream code; its
 hosting and startup path changed. See [runtime provenance](docs/python-runtime.md).
 
 The real-browser regression uses an installed Playwright Core and Chrome. Serve
@@ -90,6 +90,8 @@ blocks jsDelivr to verify that the current app has no runtime dependency on it.
 The runner checks saved scores, preserved drafts, sandbox cleanup and complete
 runtime responses; it never substitutes a fake interpreter. Routing is disabled
 for the main repeat tests, because Playwright routing disables HTTP caching.
+Repeated runs are still not cache evidence: requests from the opaque-origin
+sandbox bypass the HTTP cache, so Chrome downloads the runtime on every run.
 Run against a preview before publishing production.
 
 `public/python-worker.js` remains as a compatibility endpoint for tabs opened

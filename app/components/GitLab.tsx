@@ -26,8 +26,8 @@ export function gitChanges(state: GitState) {
   return { staged, changed, untracked };
 }
 function isClean(state: GitState) { const changes = gitChanges(state); return !changes.staged.length && !changes.changed.length && !changes.untracked.length; }
-function ancestors(state: GitState, id: string) {
-  const seen = new Map<string, number>(); const queue: [string, number][] = [[id, 0]];
+function ancestors(state: GitState, ...ids: string[]) {
+  const seen = new Map<string, number>(); const queue: [string, number][] = ids.map(id => [id, 0]);
   for (let i = 0; i < queue.length; i++) {
     const [current, depth] = queue[i]; if (seen.has(current)) continue; seen.set(current, depth);
     const commit = state.commits.find(item => item.id === current);
@@ -42,7 +42,7 @@ function makeCommit(state: GitState, message: string, parents = [state.branches[
   return id;
 }
 function validBranch(name: string) {
-  return /^[a-zA-Z0-9][a-zA-Z0-9_./-]{0,49}$/.test(name) && !name.includes("..") && !name.includes("//") && !name.endsWith("/") && !name.endsWith(".") && !name.endsWith(".lock") && name.split("/").every(part => !part.startsWith("."));
+  return /^[a-zA-Z0-9][a-zA-Z0-9_./-]{0,49}$/.test(name) && name !== "HEAD" && !name.includes("..") && !name.includes("//") && !name.endsWith("/") && !name.endsWith(".") && name.split("/").every(part => !part.startsWith(".") && !part.endsWith(".lock"));
 }
 function parseCommand(command: string): string[] | null {
   const parts: string[] = []; let word = ""; let quote = ""; let escaped = false; let started = false;
@@ -187,7 +187,10 @@ export function runGitCommand(previous: GitState, command: string): GitResponse 
       state.branches[state.branch] = target; state.working = { ...theirs.files }; state.index = { ...theirs.files };
       return reply(`Fast-forward: ${state.branch} now points to ${target}. No extra commit was needed because its previous tip was an ancestor.`);
     }
-    const common = [...ourAncestors.keys()].filter(id => theirAncestors.has(id)).sort((a, b) => ourAncestors.get(a)! + theirAncestors.get(a)! - ourAncestors.get(b)! - theirAncestors.get(b)!)[0];
+    const shared = [...ourAncestors.keys()].filter(id => theirAncestors.has(id));
+    // Like git merge-base, never use a common ancestor that another common ancestor already contains.
+    const older = ancestors(state, ...shared.flatMap(id => state.commits.find(commit => commit.id === id)!.parents));
+    const common = shared.filter(id => !older.has(id)).sort((a, b) => ourAncestors.get(a)! + theirAncestors.get(a)! - ourAncestors.get(b)! - theirAncestors.get(b)!)[0];
     if (!common) return reply("These histories have no common ancestor; this simulator does not combine unrelated repositories.");
     const base = state.commits.find(commit => commit.id === common)!.files;
     const files = [...new Set([...Object.keys(base), ...Object.keys(ours.files), ...Object.keys(theirs.files)])];
