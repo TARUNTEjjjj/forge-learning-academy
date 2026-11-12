@@ -48,6 +48,16 @@ export function validateFiles(files: unknown): string | null {
   return null;
 }
 
+/** Rename atomically so a failed validation never loses a file or its contents. */
+export function renameProjectFile(project: ProjectDocument, from: string, to: string): ProjectDocument {
+  if (from === "main.py") throw new Error("Keep main.py as the Python entry point.");
+  if (!project.files.some(file => file.path === from)) throw new Error("The file to rename no longer exists.");
+  const files = project.files.map(file => file.path === from ? { ...file, path: to } : file);
+  const problem = validateFiles(files) || validateFileHierarchy(files);
+  if (problem) throw new Error(problem);
+  return withFiles(project, files);
+}
+
 export function validProjectDocument(value: unknown): value is ProjectDocument {
   if (!value || typeof value !== "object") return false;
   const p = value as Record<string, unknown>;
