@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowUpRight, Check, Code2, Download, FolderGit2, GitBranch, Plus, RotateCcw, Save, ShieldCheck, Trash2 } from "lucide-react";
 import { repositoryUrl, type LearnerState } from "../../lib/progress";
-import { byteLength, createProject, createProjectZip, FILE_LIMIT, normalizeSavedProject, PROJECT_LIMIT, PROJECT_TEMPLATES, projectContentEqual, validateFileHierarchy, validateFilePath, validateFiles, withFiles, WORKFLOW_STARTER, type ProjectDocument, type ProjectFile } from "../../lib/project-files";
+import { byteLength, createProject, createProjectZip, FILE_LIMIT, normalizeSavedProject, PROJECT_LIMIT, PROJECT_TEMPLATES, projectContentEqual, renameProjectFile, validateFileHierarchy, validateFilePath, validateFiles, withFiles, WORKFLOW_STARTER, type ProjectDocument, type ProjectFile } from "../../lib/project-files";
 import { hasVolatileProjectDrafts, markProjectDraftSaved, parseProjectDraftSnapshot, projectDraftEpoch, readProjectDraft, readProjectDraftSnapshot, removeProjectDraft, resolveProjectDraft, saveProjectDraft, subscribeProjectDrafts } from "../../lib/draft-store";
 
 type SavedProject = LearnerState["projects"][number];
@@ -83,6 +83,15 @@ function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
     if (!project || !activeFile || activeFile.path === "main.py") return;
     if (edit(withFiles(project, project.files.filter(file => file.path !== activeFile.path)))) { setRemoved(activeFile); setTab("main.py"); }
   }
+  function renameFile() {
+    if (!project || !activeFile || activeFile.path === "main.py") return;
+    const name = window.prompt("Rename this file. Update Python imports and other references yourself after renaming.", activeFile.path);
+    if (name === null || name.trim() === activeFile.path) return;
+    try {
+      const path = name.trim();
+      if (edit(renameProjectFile(project, activeFile.path, path))) { setTab(path); setRemoved(null); setMessage("File renamed. Its contents were preserved; update any imports or references to the old path."); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "The file could not be renamed."); }
+  }
   function restoreFile() {
     if (!project || !removed) return;
     const files = [...project.files, removed]; const problem = validateFiles(files) || validateFileHierarchy(files);
@@ -138,7 +147,7 @@ function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
         <div className="callout"><Code2 size={21}/><span>{template?.brief || "Build a useful feature, add tests, and explain your design decisions."}</span></div>
         <div className="project-file-tabs" role="group" aria-label="Project files">{project.files.map(file => <button key={file.path} className={file.path === activeFile?.path ? "active" : ""} aria-pressed={file.path === activeFile?.path} onClick={() => setTab(file.path)}>{file.path}</button>)}</div>
         <textarea className="project-editor" aria-label={`Edit ${activeFile?.path || "project file"}`} value={activeFile?.content || ""} onChange={event => editFile(event.target.value)} spellCheck={false} autoCapitalize="off" autoCorrect="off" maxLength={40000}/>
-        <div className="editor-bottom"><span>{activeFile?.path} · {byteLength(activeFile?.content || "").toLocaleString()} / 40,000 bytes · Editable</span>{activeFile?.path !== "main.py" && <button className="text-button" onClick={removeFile}><Trash2 size={14}/>Remove file</button>}</div>
+        <div className="editor-bottom"><span>{activeFile?.path} · {byteLength(activeFile?.content || "").toLocaleString()} / 40,000 bytes · Editable</span>{activeFile?.path !== "main.py" && <><button className="text-button" onClick={renameFile}>Rename file</button><button className="text-button" onClick={removeFile}><Trash2 size={14}/>Remove file</button></>}</div>
         <div className="project-file-tools"><form onSubmit={event => { event.preventDefault(); addFile(); }}><label className="sr-only" htmlFor="new-project-file">New file path</label><input id="new-project-file" value={newPath} maxLength={160} placeholder="New file path, e.g. utils.py" onChange={event => setNewPath(event.target.value)}/><button className="outline small" disabled={!newPath.trim() || project.files.length >= FILE_LIMIT}><Plus size={14}/>Add file</button></form><span>{project.files.length}/{FILE_LIMIT} files · {project.files.reduce((total, file) => total + byteLength(file.content), 0).toLocaleString()} / 160,000 bytes</span></div>
         {removed && <p className="project-inline-notice">Removed {removed.path}. <button className="text-button" onClick={restoreFile}><RotateCcw size={14}/>Restore file</button></p>}
         <label className="project-repo">Repository URL <span>(optional, self-reported)</span><input value={project.repoUrl} type="url" maxLength={300} placeholder="https://github.com/your-name/your-project" onChange={event => edit({ ...project, repoUrl: event.target.value })}/></label>

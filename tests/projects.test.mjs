@@ -35,6 +35,29 @@ test("each project starter has editable source, tests, README, and gitignore", (
   assert.notEqual(createProject("study-tracker").id, createProject("study-tracker").id);
 });
 
+test("renaming preserves contents and supports nested paths and capitalization", () => {
+  const original = project("rename");
+  const renamed = files.renameProjectFile(original, "test_main.py", "tests/test_tracker.py");
+  assert.equal(renamed.files.find(file => file.path === "tests/test_tracker.py").content, original.files.find(file => file.path === "test_main.py").content);
+  assert.ok(original.files.some(file => file.path === "test_main.py"));
+  assert.equal(renamed.code, original.code);
+  const capitalized = files.renameProjectFile(original, "README.md", "readme.md");
+  assert.ok(capitalized.files.some(file => file.path === "readme.md"));
+});
+
+test("renaming rejects entry-point changes, collisions, hierarchy conflicts and unsafe paths atomically", () => {
+  const original = project("rename-invalid");
+  const before = structuredClone(original);
+  for (const [from, to] of [["main.py", "app.py"], ["missing.py", "x.py"], ["README.md", "TEST_MAIN.py"], ["README.md", "main.py/readme.txt"], ["README.md", "../readme.txt"], ["README.md", ".env"]]) {
+    assert.throws(() => files.renameProjectFile(original, from, to));
+    assert.deepEqual(original, before);
+  }
+  const recoverable = withFiles(original, [...original.files, { path: "README.md/child.py", content: "recover me" }]);
+  const repaired = files.renameProjectFile(recoverable, "README.md", "GUIDE.md");
+  assert.equal(files.validateFileHierarchy(repaired.files), null);
+  assert.equal(repaired.files.find(file => file.path === "README.md/child.py").content, "recover me");
+});
+
 test("legacy projects keep the original Python code when upgrading the manifest", () => {
   const legacy={...project("graph-toolkit"),files:undefined,templateId:undefined};
   const normalized=normalizeSavedProject({...legacy,code:"# my existing work\n"});

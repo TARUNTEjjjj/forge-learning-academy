@@ -15,6 +15,11 @@ competition practice, and browser-saved progress. It needs no account login.
 
 ## Use it
 
+The project workspace supports renaming files while preserving their contents.
+Choose **Rename file** under the editor; `main.py` stays the entry point, and
+duplicate names, unsafe paths, and file/folder conflicts are rejected. Update
+Python imports and other references yourself after a rename.
+
 Open the live URL in Chrome. Start with Learning path → Chapter 1. Your progress
 is saved for that website address in the current browser. Use My progress to
 export your learning record, and download project ZIPs before changing devices
