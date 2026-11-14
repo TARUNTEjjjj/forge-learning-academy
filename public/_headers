@@ -29,3 +29,6 @@
 
 /runtime/pyodide/314.0.1/pyodide.asm.wasm
   Content-Type: application/wasm
+
+/offline-resources-worker.js
+  Cache-Control: no-cache
