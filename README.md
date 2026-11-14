@@ -117,3 +117,7 @@ on real execution, saved results, recovery and isolation.
 Pull requests and pushes to `main` run type checking, the Node regression suite, curriculum examples, and a production build in GitHub Actions. Same-tab progress saves are serialized: a practice result waits for an ongoing save and uses the resulting revision. Cross-tab conflicts still require review and retry rather than silently overwriting changes.
 
 Runtime compatibility note: the pinned Pyodide runtime documents module workers, but module blob workers currently fail in the reviewed WebKit opaque-origin sandbox. The existing isolated dynamic-import bootstrap remains in place and passed real Python execution during the 3 November 2026 review. Replacing it requires cross-browser verification without granting `allow-same-origin`; do not weaken that boundary as a workaround.
+
+## GitHub resource collection
+
+Explore the project-specific [resource catalog](resources/README.md): curated references, star-ranked discovery, dated source metadata, cached failure recovery and an optional read-only server API. The repository includes a daily refresh workflow; hosted sites still follow their existing deployment process.
