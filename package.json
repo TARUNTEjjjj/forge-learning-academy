@@ -10,9 +10,14 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.mjs",
     "stage:python": "node scripts/stage-python-runtime.mjs",
-    "predev": "npm run stage:python",
-    "prebuild": "npm run stage:python",
-    "test:browser": "node tests/python-browser.mjs"
+    "predev": "npm run stage:python && npm run resources:stage",
+    "prebuild": "npm run stage:python && npm run resources:stage",
+    "test:browser": "node tests/python-browser.mjs",
+    "resources:stage": "node scripts/stage-resource-explorer.mjs public/resources",
+    "test:resources:ui": "node --test scripts/resource-explorer.test.mjs",
+    "resources:refresh": "node scripts/resources/resource-server.mjs refresh --config resources/sources.json --output resources/catalog.json",
+    "resources:serve": "node scripts/resources/resource-server.mjs serve --config resources/sources.json --snapshot resources/catalog.json",
+    "test:resources": "node --test scripts/resources/resource-catalog.test.mjs && node scripts/resources/check-catalog.mjs"
   },
   "dependencies": {
     "lucide-react": "1.31.0",
