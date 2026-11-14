@@ -1,3 +1,5 @@
+// Hold updates until the learning workspace has confirmed its state.
+(window as Window & {appUpdateCanReload?:()=>boolean}).appUpdateCanReload=()=>false;
 import {Component, type ReactNode} from 'react';
 import {createRoot} from 'react-dom/client';
 import Forge from '../app/components/Forge';
