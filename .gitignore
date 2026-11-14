@@ -15,3 +15,5 @@ dist/
 # Private transport cache; publish only the normalized resource snapshot.
 resources/*.cache.json
 resources/*.tmp
+
+/public/offline-resources-worker.js
