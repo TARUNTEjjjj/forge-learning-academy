@@ -9,8 +9,16 @@ const MAX_ENVELOPE_BYTES = MAX_STATE_BYTES + 100_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const encoder = new TextEncoder();
 const responseHeaders = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
+/** Stands in for the payload hash of every receipt before a data deletion, which deleted saves could be guessed from. */
+const ERASED_PAYLOAD_HASH = "0".repeat(64);
 
 type Receipt = { operationId: string; payloadHash: string; appliedRevision: number };
+type ReceiptId = Pick<Receipt, "operationId" | "appliedRevision">;
+/**
+ * Per storage, the newest receipt a read has already checked for an earlier release's deletion. Receipts never
+ * change once written, except to have their hashes erased, so later reads check only the receipts added since.
+ */
+const checkedReceipts = new WeakMap<BrowserProgressStorage, ReceiptId>();
 type Envelope = { version: 1; revision: number; state: LearnerState; receipts: Receipt[] };
 export type BrowserProgressStorage = Pick<Storage, "getItem" | "setItem">;
 export type BrowserProgressLocks = { request<T>(name: string, callback: () => Promise<T>): Promise<T> };
@@ -29,6 +37,29 @@ function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   const record = value as Record<string, unknown>;
   return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${canonical(record[key])}`).join(",")}}`;
+}
+async function payloadDigest(cryptoApi: Pick<Crypto, "subtle">, payload: unknown) {
+  const digest = await cryptoApi.subtle.digest("SHA-256", encoder.encode(canonical(payload)));
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+/** A deletion keeps receipts as tombstones (operation ID and revision) but erases the payload hashes before its own. */
+function eraseThrough(receipts: Receipt[], index: number): Receipt[] {
+  return receipts.map((receipt, position) => position <= index ? { ...receipt, payloadHash: ERASED_PAYLOAD_HASH } : receipt);
+}
+/**
+ * Deletions saved before hashes were erased left them in place. Returns the last receipt to erase, the one just
+ * before the latest such deletion, or -1. The deletion keeps its own hash: its payload is fixed by its revision, so
+ * the hash reveals nothing, and an earlier release answers a retry of that deletion only when the hash matches.
+ */
+async function unerasedBeforeDeletion(receipts: Receipt[], cryptoApi: Pick<Crypto, "subtle">, checked?: ReceiptId) {
+  for (let index = receipts.length - 1; index >= 0; index--) {
+    const { operationId, appliedRevision, payloadHash } = receipts[index];
+    if (payloadHash === ERASED_PAYLOAD_HASH || (operationId === checked?.operationId && appliedRevision === checked.appliedRevision)) return -1;
+    if (payloadHash === await payloadDigest(cryptoApi, { action: "deleteData", revision: appliedRevision - 1, confirm: "DELETE MY DATA" })) {
+      return index > 0 && receipts[index - 1].payloadHash !== ERASED_PAYLOAD_HASH ? index - 1 : -1;
+    }
+  }
+  return -1;
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -144,8 +175,7 @@ export function createBrowserProgressRequest(dependencies: BrowserProgressDepend
         action = validateAction(JSON.parse(serialized));
         operationId = action.operationId ?? cryptoApi.randomUUID();
         const { operationId: ignoredId, ...normalizedPayload } = action; void ignoredId;
-        const digest = await cryptoApi.subtle.digest("SHA-256", encoder.encode(canonical(normalizedPayload)));
-        payloadHash = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+        payloadHash = await payloadDigest(cryptoApi, normalizedPayload);
       }
       return await dependencies.locks.request(BROWSER_PROGRESS_LOCK, async () => {
         const existing = readEnvelope(dependencies.storage);
@@ -153,19 +183,34 @@ export function createBrowserProgressRequest(dependencies: BrowserProgressDepend
         if (method === "GET") {
           // First use verifies writes are possible rather than displaying a fictitious saved workspace.
           if (!existing) writeEnvelope(dependencies.storage, current);
+          else {
+            // A deletion saved by an earlier release kept the payload hashes before it: erase them now. The read
+            // still succeeds when storage cannot take this write, and the next read tries again.
+            try {
+              const through = await unerasedBeforeDeletion(current.receipts, cryptoApi, checkedReceipts.get(dependencies.storage));
+              if (through >= 0) writeEnvelope(dependencies.storage, { ...current, receipts: eraseThrough(current.receipts, through) });
+              const newest = current.receipts.at(-1);
+              if (newest) checkedReceipts.set(dependencies.storage, { operationId: newest.operationId, appliedRevision: newest.appliedRevision });
+            } catch { /* Retried on the next read. */ }
+          }
           return json(progressResponse(current.state, current.revision));
         }
         if (!action) throw new ProgressError("An update body is required.");
         const receipt = current.receipts.find(item => item.operationId === operationId);
         if (receipt) {
-          if (receipt.payloadHash !== payloadHash) return json({ error: "This operation ID already belongs to a different update. Refresh your progress before trying again.", code: "operation_conflict", ...progressResponse(current.state, current.revision) }, 409);
+          // An erased receipt has no payload hash left, but a retry of its save still carries the revision it was applied at.
+          const sameUpdate = receipt.payloadHash === ERASED_PAYLOAD_HASH ? action.revision === receipt.appliedRevision - 1 : receipt.payloadHash === payloadHash;
+          if (!sameUpdate) return json({ error: "This operation ID already belongs to a different update. Refresh your progress before trying again.", code: "operation_conflict", ...progressResponse(current.state, current.revision) }, 409);
           return json({ ...progressResponse(current.state, current.revision), operationId, replayed: true, appliedRevision: receipt.appliedRevision });
         }
         if (action.revision !== current.revision) return json({ error: "Your progress changed in another tab. Refresh and retry your change.", code: "revision_conflict", ...progressResponse(current.state, current.revision) }, 409);
         const revision = current.revision + 1;
         const state = applyAction(current.state, action, (dependencies.now?.() ?? new Date()).toISOString(), cryptoApi.randomUUID());
         // Reset preserves revision/receipt tombstones; delayed pre-reset saves cannot resurrect erased work.
-        const receipts = [...current.receipts, { operationId, payloadHash, appliedRevision: revision }].slice(-BROWSER_RECEIPT_LIMIT);
+        // It erases their payload hashes: anyone who can read this storage could recover deleted saves by hashing guesses.
+        // Its own receipt keeps its hash, which only restates its revision, so every release can answer a retry of it.
+        const appended = [...current.receipts, { operationId, payloadHash, appliedRevision: revision }];
+        const receipts = (action.action === "deleteData" ? eraseThrough(appended, appended.length - 2) : appended).slice(-BROWSER_RECEIPT_LIMIT);
         writeEnvelope(dependencies.storage, { version: 1, revision, state, receipts });
         return json({ ...progressResponse(state, revision), operationId, replayed: false, appliedRevision: revision });
       });

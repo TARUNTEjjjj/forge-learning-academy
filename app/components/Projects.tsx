@@ -2,17 +2,32 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowUpRight, Check, Code2, Download, FolderGit2, GitBranch, Plus, RotateCcw, Save, ShieldCheck, Trash2 } from "lucide-react";
-import { repositoryUrl, type LearnerState } from "../../lib/progress";
+import { MAX_STATE_BYTES, projectSaveBytes, repositoryUrl, validateAction, type LearnerState } from "../../lib/progress";
 import { byteLength, createProject, createProjectZip, FILE_LIMIT, normalizeSavedProject, PROJECT_LIMIT, PROJECT_TEMPLATES, projectContentEqual, renameProjectFile, validateFileHierarchy, validateFilePath, validateFiles, withFiles, WORKFLOW_STARTER, type ProjectDocument, type ProjectFile } from "../../lib/project-files";
 import { hasVolatileProjectDrafts, markProjectDraftSaved, parseProjectDraftSnapshot, projectDraftEpoch, readProjectDraft, readProjectDraftSnapshot, removeProjectDraft, resolveProjectDraft, saveProjectDraft, subscribeProjectDrafts } from "../../lib/draft-store";
 
 type SavedProject = LearnerState["projects"][number];
 export type ProjectSave = ProjectDocument;
-type Props = { projects: SavedProject[]; onSave: (project: ProjectSave) => Promise<boolean>; signed: boolean; userKey: string };
+type Props = { projects: SavedProject[]; usedBytes: number; reservedBytes: number; onSave: (project: ProjectSave) => Promise<boolean>; signed: boolean; userKey: string };
 
 export default function Projects(props: Props) { return <ProjectsWorkspace key={props.userKey} {...props}/>; }
 
-function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
+/**
+ * Saved projects share the browser's saved record with practice history and notes: say so before a save would fail.
+ * A save that grows the record must also leave the room kept for practice results; one that shrinks it always helps.
+ */
+function spaceProblem(project: ProjectDocument, projects: SavedProject[], usedBytes: number, reservedBytes: number) {
+  try {
+    const action = validateAction({ ...project, action: "saveProject", revision: 0 });
+    if (action.action !== "saveProject") return "";
+    const change = projectSaveBytes(projects, action), after = usedBytes + change;
+    if (after > MAX_STATE_BYTES) return `Saving this project would bring your saved browser workspace to ${after.toLocaleString()} bytes, over its ${MAX_STATE_BYTES.toLocaleString()}-byte limit. Shorten this project or another saved project, then save.`;
+    if (change > 0 && after + reservedBytes > MAX_STATE_BYTES) return `Saving this project would bring your saved browser workspace to ${after.toLocaleString()} bytes and leave less than the ${reservedBytes.toLocaleString()} bytes kept for your practice results. Shorten this project or another saved project, then save.`;
+    return "";
+  } catch { return ""; }
+}
+
+function ProjectsWorkspace({ projects, usedBytes, reservedBytes, onSave, signed, userKey }: Props) {
   const subscribe = useCallback((callback: () => void) => subscribeProjectDrafts(userKey, callback), [userKey]);
   const raw = useSyncExternalStore(subscribe, () => readProjectDraftSnapshot(userKey), () => "[]");
   const drafts = parseProjectDraftSnapshot(raw);
@@ -39,7 +54,7 @@ function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
   const dirty = !!draft && draft.revision !== draft.savedRevision;
   const template = PROJECT_TEMPLATES.find(item => item.id === project?.templateId);
   const repoProblem = project ? (() => { try { repositoryUrl(project.repoUrl); return ""; } catch (reason) { return reason instanceof Error ? reason.message : "Use a GitHub repository URL."; } })() : "";
-  const validation = project ? validateFiles(project.files) || (!project.title.trim() ? "Give your project a title before saving." : "") || repoProblem : "";
+  const validation = project ? validateFiles(project.files) || (!project.title.trim() ? "Give your project a title before saving." : "") || repoProblem || (signed ? spaceProblem(project, projects, usedBytes, reservedBytes) : "") : "";
 
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
@@ -149,6 +164,7 @@ function ProjectsWorkspace({ projects, onSave, signed, userKey }: Props) {
         <textarea className="project-editor" aria-label={`Edit ${activeFile?.path || "project file"}`} value={activeFile?.content || ""} onChange={event => editFile(event.target.value)} spellCheck={false} autoCapitalize="off" autoCorrect="off" maxLength={40000}/>
         <div className="editor-bottom"><span>{activeFile?.path} · {byteLength(activeFile?.content || "").toLocaleString()} / 40,000 bytes · Editable</span>{activeFile?.path !== "main.py" && <><button className="text-button" onClick={renameFile}>Rename file</button><button className="text-button" onClick={removeFile}><Trash2 size={14}/>Remove file</button></>}</div>
         <div className="project-file-tools"><form onSubmit={event => { event.preventDefault(); addFile(); }}><label className="sr-only" htmlFor="new-project-file">New file path</label><input id="new-project-file" value={newPath} maxLength={160} placeholder="New file path, e.g. utils.py" onChange={event => setNewPath(event.target.value)}/><button className="outline small" disabled={!newPath.trim() || project.files.length >= FILE_LIMIT}><Plus size={14}/>Add file</button></form><span>{project.files.length}/{FILE_LIMIT} files · {project.files.reduce((total, file) => total + byteLength(file.content), 0).toLocaleString()} / 160,000 bytes</span></div>
+        {signed && <p className="fine-print">Saved projects share {MAX_STATE_BYTES.toLocaleString()} bytes of browser storage with your practice history and notes. {usedBytes.toLocaleString()} bytes are in use{reservedBytes > 0 ? `, and ${reservedBytes.toLocaleString()} more are kept for your practice results` : ""}.</p>}
         {removed && <p className="project-inline-notice">Removed {removed.path}. <button className="text-button" onClick={restoreFile}><RotateCcw size={14}/>Restore file</button></p>}
         <label className="project-repo">Repository URL <span>(optional, self-reported)</span><input value={project.repoUrl} type="url" maxLength={300} placeholder="https://github.com/your-name/your-project" onChange={event => edit({ ...project, repoUrl: event.target.value })}/></label>
         <div className="project-save-state" role="status"><Check size={16}/><span>{volatile ? "Edits are kept only for this visit. Download your files before leaving." : dirty ? "Edits recovered in this browser. Save a version here, and download a ZIP to use elsewhere." : saved ? "Saved browser project loaded. Your next edit will be recovered here." : "Local project recovered on this device."}</span></div>

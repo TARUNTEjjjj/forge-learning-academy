@@ -13,10 +13,11 @@
  * Chrome downloads the runtime on every run.
  */
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import ts from 'typescript';
 
 const origin = new URL(process.env.FORGE_ORIGIN || 'http://127.0.0.1:4173').origin;
 assert(['http:', 'https:'].includes(new URL(origin).protocol), 'Use an HTTP(S) Forge origin.');
@@ -45,6 +46,14 @@ const stateWriter = 'import builtins\nbuiltins._forge_browser_probe = 73\n' + co
 const stateReader = 'import builtins\ndef progress(completed, goal):\n'
   + '    if hasattr(builtins, "_forge_browser_probe"):\n        return -999\n'
   + '    return 0 if goal <= 0 else max(0, min(100, completed * 100 // goal))\n';
+// The lab opens on the progress mission. Read its graded cases, so the expected scores follow lib/missions.ts.
+const missionsSource = readFileSync(new URL('../lib/missions.ts', import.meta.url), 'utf8');
+const { MISSIONS, jsonEqual } = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(missionsSource,
+  { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText).toString('base64')}`);
+const progressCases = MISSIONS.find(mission => mission.id === 'progress').tests;
+const checks = progressCases.length;
+// `incomplete` returns 0, so under the lab's pass rule it passes exactly the cases that expect 0.
+const incompletePassed = progressCases.filter(test => jsonEqual(0, test.expected)).length;
 const report = {
   origin, runtimeVersion: '314.0.1', startedAt: new Date().toISOString(),
   passed: false, runs: [], network: [], contexts: [], errors: [], console: [],
@@ -129,7 +138,7 @@ async function noExecutionFrame(page) {
     frameSelector, { timeout: 5000 });
 }
 
-async function run(workspace, name, code, { passed = 6, message, category } = {}) {
+async function run(workspace, name, code, { passed = checks, message, category } = {}) {
   const { page, label } = workspace;
   const previousCount = await attemptCount(page);
   await page.getByLabel(editorName).fill(code);
@@ -140,7 +149,7 @@ async function run(workspace, name, code, { passed = 6, message, category } = {}
   await page.locator('.lab-feedback').waitFor({ timeout: 75_000 });
   entry.milliseconds = Date.now() - start;
   entry.feedback = (await page.locator('.lab-feedback').innerText()).slice(0, 1500);
-  assert(entry.feedback.includes(message || `${passed} / 6 checks passed`), `${name}: ${entry.feedback}`);
+  assert(entry.feedback.includes(message || `${passed} / ${checks} checks passed`), `${name}: ${entry.feedback}`);
   await noExecutionFrame(page);
   await page.waitForFunction(count => {
     const state = JSON.parse(localStorage.getItem('forge.browser-progress.v1'));
@@ -148,7 +157,7 @@ async function run(workspace, name, code, { passed = 6, message, category } = {}
   }, previousCount + 1, { timeout: 5000 });
   const latest = await page.evaluate(() => JSON.parse(localStorage.getItem('forge.browser-progress.v1')).state.attempts.at(-1));
   assert.equal(latest.passed, passed, `${name}: saved score`);
-  assert.equal(latest.total, 6, `${name}: saved denominator`);
+  assert.equal(latest.total, checks, `${name}: saved denominator`);
   if (category) assert.equal(latest.category, category, `${name}: saved feedback category`);
   assert.equal(await page.getByLabel(editorName).inputValue(), code, `${name}: code preserved`);
   entry.saved = { passed: latest.passed, total: latest.total, category: latest.category };
@@ -183,7 +192,7 @@ try {
   const repeated = await newWorkspace('repeated-no-routing');
   for (let pair = 1; pair <= 2; pair++) {
     await run(repeated, `correct pair ${pair}`, correct);
-    await run(repeated, `incomplete pair ${pair}`, incomplete, { passed: 3 });
+    await run(repeated, `incomplete pair ${pair}`, incomplete, { passed: incompletePassed });
   }
   await run(repeated, 'write isolated builtins state', stateWriter);
   await run(repeated, 'fresh interpreter has no previous builtins state', stateReader);
@@ -201,7 +210,7 @@ try {
 
   const cold = await newWorkspace('separate-cold-context');
   await run(cold, 'cold-context correct', correct);
-  await run(cold, 'cold-context incomplete', incomplete, { passed: 3 });
+  await run(cold, 'cold-context incomplete', incomplete, { passed: incompletePassed });
   await closeWorkspace(cold);
 
   if (process.env.FORGE_BLOCK_CDN === '1') {

@@ -4,9 +4,13 @@ Live website: https://forge-learning-academy.pages.dev/
 
 Source repository: https://github.com/TARUNTEjjjj/forge-learning-academy
 
-The source repository and website are public. The website runs on Cloudflare Pages.
-Pushing to this repository does not automatically deploy; use the publish command
-below.
+The website is public and runs on Cloudflare Pages. The source repository was
+private at the 9 November 2026 review. While it is private, its source, tests
+and commit history need repository access, and the
+[resource library](#github-resource-collection) cannot read its live catalog
+from GitHub, so it shows the snapshot bundled with the site. Visitors can
+always inspect the frontend assets delivered to their browsers. Pushing to this
+repository does not automatically deploy; use the publish command below.
 
 This edition runs entirely in the visitor's browser and is hosted as static
 assets on Cloudflare Pages. It includes the 3D learning map, 50 guided modules,
@@ -22,8 +26,10 @@ Python imports and other references yourself after a rename.
 
 Open the live URL in Chrome. Start with Learning path → Chapter 1. Your progress
 is saved for that website address in the current browser. Use My progress to
-export your learning record, and download project ZIPs before changing devices
-or clearing browser data. The previous localhost record is separate.
+export your learning record, which includes your Python lab drafts, and download
+project ZIPs before changing devices or clearing browser data. These downloads
+are copies to keep; this edition cannot load them back in. The previous
+localhost record is separate.
 
 Python downloads its pinned runtime from this website. C++ and official contest
 submissions use your local compiler or the original judge. Git playground is
@@ -74,7 +80,9 @@ free under Cloudflare's published Pages pricing; no paid domain was purchased.
 
 The current build passes TypeScript, Vite and the automated `npm test` checks
 covering curriculum, Python/Git models, persistence, project exports, runner
-cleanup and pinned runtime integrity. The Python runtime is unchanged upstream code; its
+cleanup and pinned runtime integrity. The practice lab and project editor are
+also rendered in Node with a small React stand-in (`tests/react-stand-in.mjs`)
+and driven through their own handlers. The Python runtime is unchanged upstream code; its
 hosting and startup path changed. See [runtime provenance](docs/python-runtime.md).
 
 The real-browser regression uses an installed Playwright Core and Chrome. Serve
