@@ -11,21 +11,40 @@ type CaseResult = { value: JsonValue; error: string | null; mutated: boolean };
 type Feedback = { results: CaseResult[]; error: string | null; output: string; sample: boolean };
 type Status = "idle" | "loading" | "running" | "done" | "error";
 
-const memoryStore = new Map<string, string>();
+/** Writes that storage refused, kept for this tab only, with the deletion epochs they were made under. */
+const memoryStore = new Map<string, { value: string; epochs: string | null }>();
 function subscribeStore(notify: () => void) {
   const otherTab = (event: StorageEvent) => { if (event.key) memoryStore.delete(event.key); else memoryStore.clear(); notify(); };
   window.addEventListener("storage", otherTab);
   window.addEventListener("forge-lab-storage", notify);
   return () => { window.removeEventListener("storage", otherTab); window.removeEventListener("forge-lab-storage", notify); };
 }
+/**
+ * "Delete my learning data" writes a new forge.lab.epoch (every learner) or forge.lab.user.<user>.epoch, in this tab
+ * or another. Returns the epochs of every deletion that would remove this key, or null when storage cannot be read.
+ */
+function deletionEpochs(key: string) {
+  const names = ["forge.lab.epoch"];
+  // resetPracticeStorage(user) removes every key that starts with forge.lab.user.<user>.
+  if (key.startsWith("forge.lab.user.")) for (let dot = key.indexOf(".", "forge.lab.user.".length); dot >= 0; dot = key.indexOf(".", dot + 1)) names.push(`${key.slice(0, dot + 1)}epoch`);
+  try { return JSON.stringify(names.map(name => localStorage.getItem(name))); } catch { return null; }
+}
 function readStore(key: string, fallback: string) {
-  if (memoryStore.has(key)) return memoryStore.get(key)!;
+  const kept = memoryStore.get(key);
+  if (kept) {
+    // As in lib/draft-store.ts, a write kept here does not outlive a later deletion. A closed Practice view
+    // hears no storage events, so compare epochs on every read instead of relying on them.
+    const epochs = kept.epochs === null ? null : deletionEpochs(key);
+    if (epochs === null || epochs === kept.epochs) return kept.value;
+    memoryStore.delete(key);
+  }
   try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
 }
 function writeStore(key: string, value: string) {
-  memoryStore.set(key, value);
+  // Keep only failed writes in memory, as lib/draft-store.ts does. A cached copy of a saved value would hide
+  // other tabs' later saves and deletions, which this view does not hear about while it is closed.
   let persisted = true;
-  try { localStorage.setItem(key, value); } catch { persisted = false; }
+  try { localStorage.setItem(key, value); memoryStore.delete(key); } catch { memoryStore.set(key, { value, epochs: deletionEpochs(key) }); persisted = false; }
   window.dispatchEvent(new Event("forge-lab-storage"));
   return persisted;
 }
@@ -42,6 +61,16 @@ export function resetPracticeStorage(userKey?: string) {
   window.dispatchEvent(new CustomEvent("forge-lab-reset", { detail: userKey }));
   window.dispatchEvent(new Event("forge-lab-storage"));
   return persisted;
+}
+/** The drafts the editor shows and the completed missions, for "Export my learning record": deletion clears them too. */
+export function practiceRecord(userKey: string) {
+  const storePrefix = `forge.lab.user.${encodeURIComponent(userKey)}.`;
+  const drafts: Record<string, string> = {};
+  for (const mission of MISSIONS) {
+    const code = readStore(`${storePrefix}code.${mission.id}`, mission.starter);
+    if (code !== mission.starter && code.length <= 30000) drafts[mission.id] = code;
+  }
+  return { completed: completedIds(readStore(`${storePrefix}completed`, "[]")), drafts };
 }
 function completedIds(raw: string): string[] {
   try { const value: unknown = JSON.parse(raw); return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string" && MISSIONS.some(m => m.id === id)) : []; } catch { return []; }
@@ -140,6 +169,12 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
     if (!busy) setStatus("idle");
     if (!writeStore(`${storePrefix}code.${missionId}`, value)) setStorageNotice(true);
   }
+  function resetCode() {
+    // The confirmation can stay open while a run starts. Stop that run, as cancel() does, so its result,
+    // time limit and progress report never land beside the starter code.
+    runSerial.current++; cleanup.current?.(); cleanup.current = null;
+    updateCode(mission.starter); setFeedback(null); setStatus("idle"); setResetOpen(false);
+  }
   function focusEditorAfterRemoval() {
     const active = document.activeElement;
     if (active instanceof HTMLElement && active.matches(":focus-visible") && (active.closest(".lab-feedback") || active.closest(".lab-stop"))) editorRef.current?.focus();
@@ -175,10 +210,10 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
       if (frame) { disposeSandbox(frame, nonce); frame = undefined; }
     };
     cleanup.current = dispose;
-    const fail = (message: string, performance = false) => {
+    const fail = (message: string, performance = false, output = "") => {
       if (serial !== runSerial.current || settled) return;
       focusEditorAfterRemoval();
-      dispose(); setStatus("error"); setFeedback({ results: [], error: message, output: "", sample });
+      dispose(); setStatus("error"); setFeedback({ results: [], error: message, output, sample });
       if (performance && !sample) resultRef.current?.({ missionId: mission.id, passed: 0, total: tests.length, category: "performance" });
     };
     timer = setTimeout(() => fail("Python took too long to load. Check your connection, then retry. Your code is still here."), 60000);
@@ -192,6 +227,8 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
         if (serial !== runSerial.current || settled || event.source !== frame?.contentWindow || event.data?.nonce !== nonce) return;
         const data = event.data.data;
         if (!data || typeof data !== "object") return;
+        // The worker sends what the program printed with its result, and also with an error that stopped it.
+        const output = typeof data.output === "string" ? data.output.slice(0, 4000) : "";
         if (data.type === "ready") {
           if (started) return;
           started = true;
@@ -200,11 +237,11 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
           timer = setTimeout(() => fail("This run reached the 8-second limit. Check that each loop moves toward its stopping condition, then try again.", true), 8000);
           frame!.contentWindow!.postMessage({ type: "run", nonce, payload: { type: "run", code, functionName: mission.functionName, cases: tests.map(test => test.args) } }, "*");
         } else if (data.type === "error") {
-          fail(typeof data.message === "string" ? data.message.slice(0, 1500) : "This run could not finish. Please try again.");
+          fail(typeof data.message === "string" ? data.message.slice(0, 1500) : "This run could not finish. Please try again.", false, output);
         } else if (data.type === "result") {
           if (!started) return;
-          if (!validateRunnerResult(data.payload, tests.length)) { fail("The program returned an unexpected result format. Return a plain Python value matching the contract."); return; }
-          const result: Feedback = { ...data.payload, output: typeof data.output === "string" ? data.output.slice(0, 4000) : "", sample };
+          if (!validateRunnerResult(data.payload, tests.length)) { fail("The program returned an unexpected result format. Return a plain Python value matching the contract.", false, output); return; }
+          const result: Feedback = { ...data.payload, output, sample };
           focusEditorAfterRemoval();
           dispose(); setStatus(result.error ? "error" : "done"); setFeedback(result);
           if (!sample && result.error) {
@@ -259,7 +296,7 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
             }} />
           </div>
           <div className="lab-editor-footer"><span>Return a value from <code>{mission.functionName}</code> · Ctrl / ⌘ Enter to check</span><button className="lab-text-button" onClick={() => setResetOpen(!resetOpen)} disabled={busy}><RotateCcw size={13} /> Reset code</button></div>
-          {resetOpen && <div className="lab-reset-confirm"><span>Replace this mission’s code with its starter?</span><button onClick={() => { updateCode(mission.starter); setFeedback(null); setStatus("idle"); setResetOpen(false); }}>Reset</button><button onClick={() => setResetOpen(false)}>Keep my code</button></div>}
+          {resetOpen && <div className="lab-reset-confirm"><span>Replace this mission’s code with its starter?</span><button onClick={resetCode}>Reset</button><button onClick={() => setResetOpen(false)}>Keep my code</button></div>}
         </div>
         <div className="lab-actions"><div><button className="lab-secondary" onClick={() => void run(true)} aria-disabled={busy}><Play size={15} /> Run examples</button><button className="lab-primary" onClick={() => void run(false)} aria-disabled={busy}>{busy ? <Loader2 size={16} className="lab-spin" /> : <CheckCircle2 size={16} />}{status === "loading" ? "Loading Python…" : status === "running" ? "Checking…" : "Check solution"}</button>{busy && <button className="lab-stop" onClick={cancel}><Square size={13} /> Stop</button>}</div><button className="lab-text-button" onClick={() => setHintCount(value => Math.min(value + 1, mission.hints.length))} disabled={hintCount >= mission.hints.length}><Lightbulb size={16} /> {hintCount === 0 ? "A small nudge" : hintCount < mission.hints.length ? "Another nudge" : "All hints shown"}</button></div>
         {busy && <p className="lab-runtime-message" role="status">{status === "loading" ? "Preparing an isolated Python workspace. Each run may download the Python runtime (about 6 MB) again, so this can take up to a minute." : "Running your function against the selected cases. This run stops automatically after 8 seconds."}</p>}
@@ -277,7 +314,7 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
           {feedback.output && <details className="lab-output"><summary>Console output</summary><pre>{feedback.output}</pre></details>}
         </section>}
         <div className="lab-resource"><a href={mission.resource.url} target="_blank" rel="noopener noreferrer"><BookOpen size={15} /> {mission.resource.label} <ArrowRight size={13} /></a><span>Original exercises · practice feedback, not a certified grade</span></div>
-        <p className="lab-privacy">Code runs in your browser in an isolated worker; a fresh workspace is created for every run. Drafts and completed missions are saved on this device. Runs need an internet connection, because each one may download the Python runtime again. Test checks verify outputs; complexity requirements need your own reasoning.</p>
+        <p className="lab-privacy">Code runs in your browser in an isolated worker; a fresh workspace is created for every run. Drafts and completed missions are saved on this device and included when you export your learning record. Runs need an internet connection, because each one may download the Python runtime again. Test checks verify outputs; complexity requirements need your own reasoning.</p>
         {storageNotice && <p className="lab-storage-notice" role="status">Browser storage is unavailable. You can keep practicing, but copy your code before closing this page.</p>}
       </section>
     </div>
@@ -328,8 +365,8 @@ const LAB_CSS = `
 .lab-samples{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:20px 0}
 .lab-samples>div{min-width:0;background:#121A2D;border:1px solid var(--lab-line);padding:12px 14px;border-radius:7px}
 .lab-samples span{display:block;font-size:9px;color:var(--lab-muted);letter-spacing:1px;margin-bottom:10px}
-.lab-samples code{display:block;overflow-wrap:anywhere;font:11px/1.6 ui-monospace,monospace;color:#F5F3EB}
-.lab-samples strong{font:12px/1.6 ui-monospace,monospace;color:var(--lab-success);display:block;margin-top:5px}
+.lab-samples code{display:block;overflow-wrap:anywhere;white-space:pre-wrap;font:11px/1.6 ui-monospace,monospace;color:#F5F3EB}
+.lab-samples strong{font:12px/1.6 ui-monospace,monospace;color:var(--lab-success);display:block;margin-top:5px;white-space:pre-wrap}
 .lab-editor-shell{border:1px solid #2B3650;border-radius:10px;overflow:hidden;background:#0B1020}
 .lab-editor-heading{display:flex;justify-content:space-between;gap:8px;align-items:center;border-bottom:1px solid var(--lab-line);padding:12px 16px;font:11px ui-monospace,monospace;color:#A6AFC1;background:#19243A}
 .lab-editor-heading>span{display:flex;align-items:center;gap:7px}
@@ -372,7 +409,7 @@ const LAB_CSS = `
 .lab-case>div{padding:0 12px 10px;font-size:11px;color:#A6AFC1}
 .lab-case p{margin:6px 0;overflow-wrap:anywhere}
 .lab-case b{font-weight:500;color:#A6AFC1;display:inline-block;min-width:80px}
-.lab-case code{font-size:10px}
+.lab-case code{font-size:10px;white-space:pre-wrap}
 .lab-next{padding:14px 17px;border-top:1px solid var(--lab-line);background:rgba(145,221,207,.08)}
 .lab-next p{margin:0 0 10px;color:#A6AFC1;font-size:12px}
 .lab-next button{background:none;border:0;display:flex;align-items:center;gap:7px;color:var(--lab-accent);font-size:12px;padding:0}

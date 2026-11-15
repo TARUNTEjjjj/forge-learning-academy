@@ -155,6 +155,33 @@ export async function readBoundedJson(request: Request): Promise<unknown> {
   catch { throw new ProgressError("The update is not valid JSON."); }
 }
 
+/** UTF-8 bytes of a value as the saved record stores it. MAX_STATE_BYTES applies to the whole record. */
+export function savedBytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+type SaveProjectAction = Extract<ProgressAction, { action: "saveProject" }>;
+function savedProject(action: SaveProjectAction, updatedAt: string): LearnerState["projects"][number] {
+  return { ...(action.files ? { files: action.files } : {}), ...(action.templateId ? { templateId: action.templateId } : {}), id: action.id, title: action.title, description: action.description, code: action.code, repoUrl: action.repoUrl, status: action.status, updatedAt };
+}
+/**
+ * Bytes that saving this project adds to the saved record (negative when it shrinks). Saved projects share
+ * MAX_STATE_BYTES with practice history and notes, so the editor checks this before a save would fail.
+ */
+export function projectSaveBytes(projects: LearnerState["projects"], action: SaveProjectAction): number {
+  const previous = projects.find(project => project.id === action.id);
+  const added = savedBytes(savedProject(action, new Date(0).toISOString()));
+  return previous ? added - savedBytes(previous) : added + (projects.length ? 1 : 0);
+}
+/**
+ * Bytes the practice history may still grow by. applyAction keeps its latest 500 attempts, so it never holds more
+ * than 500 of the largest attempts validateAction accepts. The Projects editor keeps this much of MAX_STATE_BYTES
+ * free, so saved projects cannot leave practice results without room.
+ */
+export function practiceHistoryReserve(attempts: LearnerState["attempts"]): number {
+  const largest: LearnerState["attempts"][number] = { id: "00000000-0000-4000-8000-000000000000", missionId: "m".repeat(80), passed: 999, total: 1000, category: "performance", createdAt: new Date(0).toISOString(), source: "browser-self-report" };
+  return Math.max(0, savedBytes(Array.from({ length: 500 }, () => largest)) - savedBytes(attempts));
+}
+
 export function applyAction(previous: LearnerState, action: ProgressAction, now = new Date().toISOString(), id = crypto.randomUUID()): LearnerState {
   const state: LearnerState = structuredClone(previous);
   switch (action.action) {
@@ -168,7 +195,7 @@ export function applyAction(previous: LearnerState, action: ProgressAction, now 
     case "saveProject": {
       const index = state.projects.findIndex(project => project.id === action.id);
       if (index < 0 && state.projects.length >= 20) throw new ProgressError("You can keep 20 project drafts. Update an existing draft to continue.");
-      const project = { ...(action.files ? { files: action.files } : {}), ...(action.templateId ? { templateId: action.templateId } : {}), id: action.id, title: action.title, description: action.description, code: action.code, repoUrl: action.repoUrl, status: action.status, updatedAt: now };
+      const project = savedProject(action, now);
       if (index < 0) state.projects.push(project); else state.projects[index] = project;
       break;
     }
@@ -177,7 +204,7 @@ export function applyAction(previous: LearnerState, action: ProgressAction, now 
       state.attempts = state.attempts.slice(-500); break;
     case "deleteData": return emptyState();
   }
-  if (new TextEncoder().encode(JSON.stringify(state)).byteLength > MAX_STATE_BYTES) throw new ProgressError("Your saved workspace is full. Export your progress and shorten large project drafts.", 413);
+  if (savedBytes(state) > MAX_STATE_BYTES) throw new ProgressError("Your saved workspace is full. Export your progress and shorten large project drafts.", 413);
   return state;
 }
 

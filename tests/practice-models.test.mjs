@@ -12,7 +12,7 @@ const missions = await import(missionsUrl);
 const gitSource = read("../app/components/GitLab.tsx").split("export default function GitLab")[0].replace(/^import .* from .*;$/gm, "");
 const { initialGitState, runGitCommand, gitChanges } = await import(moduleUrl(gitSource));
 const practiceSource = read("../app/components/Practice.tsx").split("export default function Practice")[0].replace(/^import pythonWorkerSource .*;$/gm, "").replace(/^import .* from "react";$/gm, "").replace(/^import .* from "lucide-react";$/gm, "").replace('"../../lib/missions"', JSON.stringify(missionsUrl));
-const { validateRunnerResult, resetPracticeStorage, readStore, writeStore, disposeSandbox } = await import(moduleUrl(practiceSource + "\nexport { readStore, writeStore, disposeSandbox };"));
+const { validateRunnerResult, resetPracticeStorage, practiceRecord, readStore, writeStore, disposeSandbox, passedCase } = await import(moduleUrl(practiceSource + "\nexport { readStore, writeStore, disposeSandbox, passedCase };"));
 const step = (state, command) => runGitCommand(state, command).state;
 const firstCommit = () => step(step(initialGitState(), "git add ."), 'git commit -m "Add tracker"');
 const edit = (state, path, content) => ({ ...state, working: { ...state.working, [path]: content } });
@@ -96,9 +96,9 @@ test("divergent changes to different files create a two-parent merge", () => {
   assert.equal(state.merge, null);
 });
 
-function conflictingState() {
-  let state = step(firstCommit(), "git switch -c feature"); state = commitEdit(state, "tracker.py", "feature content");
-  state = step(state, "git switch main"); state = commitEdit(state, "tracker.py", "main content");
+function conflictingState(path = "tracker.py") {
+  let state = step(firstCommit(), "git switch -c feature"); state = commitEdit(state, path, "feature content");
+  state = step(state, "git switch main"); state = commitEdit(state, path, "main content");
   return step(state, "git merge feature");
 }
 
@@ -116,6 +116,41 @@ test("resolved merge creates a commit that preserves both histories", () => {
   state = step(state, 'git commit -m "Resolve both ideas"');
   assert.deepEqual(current(state).parents, parents); assert.equal(state.merge, null);
   assert.equal(current(state).files["tracker.py"], "combined content");
+});
+
+test("a resolution with a setext heading or long divider stages; leftover markers are found like git diff --check", () => {
+  // git diff --check reports only exactly seven <, = or > followed by a space or the line end.
+  for (const resolved of ["Study tracker\n=============\n\nMain notes and feature notes\n", "Notes\n========\n", ">>>>>>>> deeply quoted\n", "<<<<<<<x\n", " =======\n"]) {
+    let state = step(edit(conflictingState("README.md"), "README.md", resolved), "git add README.md");
+    assert.deepEqual(state.merge.conflicts, [], JSON.stringify(resolved));
+    state = step(state, 'git commit -m "Resolve merge"');
+    assert.equal(state.merge, null, JSON.stringify(resolved)); assert.equal(current(state).files["README.md"], resolved);
+  }
+  // The underline of a 7-letter heading such as License is exactly seven = as well. git diff --check flags it too,
+  // so the lab refuses it and says what counts as a marker.
+  for (const leftover of ["Main notes\n<<<<<<< HEAD\n", "Main notes\n=======\n", "Main notes\n======= \n", "Main notes\n>>>>>>> feature\n", "Main notes\n=======", "License\n=======\n"]) {
+    const result = runGitCommand(edit(conflictingState("README.md"), "README.md", leftover), "git add README.md");
+    assert.match(result.output, /^Resolve the conflict markers in README\.md before staging it in this lab\. Line 2 still looks like one\.\n/, JSON.stringify(leftover));
+    assert.match(result.output, /a line that starts with exactly seven <, = or > followed by a space or the line end as a marker\. If that line is a heading underline, make it longer or shorter\./, JSON.stringify(leftover));
+    assert.deepEqual(result.state.merge.conflicts, ["README.md"], JSON.stringify(leftover));
+  }
+});
+
+test("git branch works during a merge like real git, but git switch -c waits for the merge", () => {
+  let state = conflictingState(); const head = state.branches.main, theirs = state.branches.feature;
+  for (const [name, setup] of [["backup", s => s], ["after-staging", s => step(edit(s, "tracker.py", "combined content"), "git add tracker.py")]]) {
+    state = setup(state);
+    const created = runGitCommand(state, `git branch ${name}`);
+    assert.equal(created.output, `Created branch ${name} at ${head}. You are still on main.`);
+    assert.equal(created.state.branches[name], head); assert.equal(created.state.branch, "main"); assert.deepEqual(created.state.merge, state.merge);
+    const switched = runGitCommand(state, `git switch -c ${name}-switch`);
+    assert.equal(switched.output, "Finish or abort the current merge before switching branches.");
+    assert.ok(!(`${name}-switch` in switched.state.branches)); assert.equal(switched.state.branch, "main");
+    state = created.state;
+  }
+  state = step(state, 'git commit -m "Resolve both ideas"');
+  assert.deepEqual(current(state).parents, [head, theirs]);
+  assert.equal(state.branches.backup, head); assert.equal(state.branches["after-staging"], head);
 });
 
 test("merge abort restores the receiving branch without history loss", () => {
@@ -140,6 +175,51 @@ test("merge base is the nearest common ancestor, so an older one cannot undo a c
   assert.deepEqual(current(state).parents, [ours, theirs]); assert.equal(state.merge, null);
   assert.equal(state.working["README.md"], original, `merge base should be ${base}; the revert must survive`);
   assert.equal(state.working["tracker.py"], "p3\n");
+});
+
+// main commits B (README.md = "b") and y commits C (path = "c"). main merges y, then y merges B, so B and C
+// are both best common ancestors of main and y: a criss-cross history. Conflicts keep the merging side's text.
+function crissCross(path = "tracker.py") {
+  let state = step(commitEdit(step(firstCommit(), "git branch y"), "README.md", "b\n"), "git branch x2");
+  state = step(step(commitEdit(step(state, "git switch y"), path, "c\n"), "git switch main"), "git merge y");
+  if (state.merge) state = commitEdit(state, path, "b\n");
+  state = step(step(state, "git switch y"), "git merge x2");
+  return state.merge ? commitEdit(state, path, "c\n") : state;
+}
+
+test("criss-cross merge keeps a revert committed on either side, as git's virtual merge base does", () => {
+  const original = initialGitState().working["README.md"];
+  const revertedHere = step(commitEdit(crissCross(), "README.md", original), "git merge main");
+  assert.equal(revertedHere.merge, null); assert.deepEqual(revertedHere.working, { "README.md": original, "tracker.py": "c\n" });
+  const revertedThere = step(step(commitEdit(step(crissCross(), "git switch main"), "README.md", original), "git switch y"), "git merge main");
+  assert.equal(revertedThere.merge, null); assert.deepEqual(revertedThere.working, { "README.md": original, "tracker.py": "c\n" });
+});
+
+test("criss-cross merge conflicts where git's does: a revert against a new edit, or two different resolutions", () => {
+  const edited = commitEdit(step(crissCross(), "git switch main"), "README.md", "e\n");
+  const revertAgainstEdit = runGitCommand(commitEdit(step(edited, "git switch y"), "README.md", initialGitState().working["README.md"]), "git merge main");
+  assert.deepEqual(revertAgainstEdit.state.merge?.conflicts, ["README.md"], revertAgainstEdit.output);
+  const resolutions = runGitCommand(crissCross("README.md"), "git merge main");
+  assert.deepEqual(resolutions.state.merge?.conflicts, ["README.md"], resolutions.output);
+});
+
+test("criss-cross merge whose bases disagree by modify/delete starts from the base version, as git's virtual merge base does", () => {
+  // The editor cannot delete a file, but runGitCommand accepts a working tree without one. One branch deletes
+  // tracker.py and the other rewrites it (B and C), so each merge that crosses them is a modify/delete conflict:
+  // main's keeps the new text and y's restores the original. git's inner merge of B and C keeps the base version
+  // of such a file, so only main has changed it since. Conflict markers there would make the last merge conflict.
+  const original = initialGitState().working["tracker.py"];
+  const rewrite = state => commitEdit(state, "tracker.py", "t1\n");
+  const remove = state => { const working = { ...state.working }; delete working["tracker.py"]; return step(step({ ...state, working }, "git add tracker.py"), 'git commit -m "Delete tracker"'); };
+  for (const [onMain, onY] of [[remove, rewrite], [rewrite, remove]]) {
+    let state = step(onMain(step(firstCommit(), "git branch y")), "git branch x2");
+    state = step(step(onY(step(state, "git switch y")), "git switch main"), "git merge y");
+    assert.deepEqual(state.merge?.conflicts, ["tracker.py"]);
+    state = step(step(rewrite(state), "git switch y"), "git merge x2");
+    assert.deepEqual(state.merge?.conflicts, ["tracker.py"]);
+    state = step(commitEdit(state, "tracker.py", original), "git merge main");
+    assert.equal(state.merge, null); assert.equal(state.working["tracker.py"], "t1\n");
+  }
 });
 
 test("merging an included ancestor is a no-op", () => {
@@ -252,6 +332,66 @@ for (const mission of missions.MISSIONS) test(`production Python harness: ${miss
   });
 });
 
+// Plausible wrong solutions that once passed every graded case. Each must now fail at least one case
+// under the lab's own passedCase rule, or the lab marks code that breaks the contract complete.
+const WRONG_SOLUTIONS = {
+  progress: {
+    "rounds to the nearest percent": `def progress(completed, goal):\n    return 0 if goal <= 0 else max(0, min(100, round(completed * 100 / goal)))`,
+    "guards only a zero goal": `def progress(completed, goal):\n    return 0 if goal == 0 else max(0, min(100, completed * 100 // goal))`,
+    "floors a floating-point ratio": `def progress(completed, goal):\n    return 0 if goal <= 0 else max(0, min(100, int(completed / goal * 100)))`,
+  },
+  "study-streak": {
+    "skips negative days instead of ending the streak": `def longest_streak(minutes):\n    best = current = 0\n    for value in minutes:\n        if value > 0: current += 1\n        elif value == 0: current = 0\n        best = max(best, current)\n    return best`,
+  },
+  "issue-labels": {
+    "collapses inner whitespace": `def label_counts(labels):\n    result = {}\n    for label in labels:\n        label = " ".join(label.split()).lower()\n        if label: result[label] = result.get(label, 0) + 1\n    return result`,
+  },
+  queue: {
+    "ignores age": `def review_order(requests):\n    return [item[0] for item in sorted(requests, key=lambda x: (-x[1], x[0]))]`,
+    "ranks id before age": `def review_order(requests):\n    return [item[0] for item in sorted(requests, key=lambda x: (-x[1], x[0], -x[2]))]`,
+  },
+  "first-bad": {
+    "drops mid from the half-open interval": `def first_at_least(times, threshold):\n    lo, hi = 0, len(times)\n    while lo < hi:\n        mid = (lo + hi) // 2\n        if times[mid] < threshold: lo = mid + 1\n        else: hi = mid - 1\n    return lo`,
+  },
+  brackets: {
+    "ignores unmatched closers": `def balanced(text):\n    stack = []\n    pairs = {')':'(', ']':'[', '}':'{'}\n    for char in text:\n        if char in '([{': stack.append(char)\n        elif char in pairs and stack and stack[-1] == pairs[char]: stack.pop()\n    return not stack`,
+    "skips a closer when the stack is empty": `def balanced(text):\n    stack = []\n    pairs = {')':'(', ']':'[', '}':'{'}\n    for char in text:\n        if char in '([{': stack.append(char)\n        elif char in pairs and stack and stack.pop() != pairs[char]: return False\n    return not stack`,
+    "skips a mismatched closer": `def balanced(text):\n    stack = []\n    pairs = {')':'(', ']':'[', '}':'{'}\n    for char in text:\n        if char in '([{': stack.append(char)\n        elif char in pairs:\n            if not stack: return False\n            if stack[-1] == pairs[char]: stack.pop()\n    return not stack`,
+  },
+  "pair-budget": {
+    "moves the pointers over the unsorted costs": `def count_pairs(costs, budget):\n    values = sorted(costs)\n    left, right, count = 0, len(values)-1, 0\n    while left < right:\n        if costs[left] + costs[right] <= budget:\n            count += right-left\n            left += 1\n        else: right -= 1\n    return count`,
+    "never sorts the costs": `def count_pairs(costs, budget):\n    values = costs\n    left, right, count = 0, len(values)-1, 0\n    while left < right:\n        if values[left] + values[right] <= budget:\n            count += right-left\n            left += 1\n        else: right -= 1\n    return count`,
+  },
+  outages: {
+    "compares with the previous input window instead of the merged one": `def merge_windows(windows):\n    result, previous = [], None\n    for start, end in sorted(windows):\n        if previous is not None and start <= previous[1]: result[-1][1] = max(result[-1][1], end)\n        else: result.append([start, end])\n        previous = [start, end]\n    return result`,
+  },
+  network: {
+    "indexes graph[node] for a node with no adjacency entry": `from collections import deque\ndef shortest_hops(graph, start, target):\n    queue = deque([(start,0)])\n    visited = {start}\n    while queue:\n        node, distance = queue.popleft()\n        if node == target: return distance\n        for neighbor in graph[node]:\n            if neighbor not in visited:\n                visited.add(neighbor)\n                queue.append((neighbor, distance+1))\n    return -1`,
+  },
+  "release-plan": {
+    "returns a partial order when a cycle exists": `import heapq\ndef build_order(deps):\n    indegree = {name:len(items) for name,items in deps.items()}\n    children = {name:[] for name in deps}\n    for name,items in deps.items():\n        for item in items: children[item].append(name)\n    heap = [name for name in deps if indegree[name] == 0]\n    heapq.heapify(heap)\n    result = []\n    while heap:\n        name = heapq.heappop(heap)\n        result.append(name)\n        for child in children[name]:\n            indegree[child] -= 1\n            if indegree[child] == 0: heapq.heappush(heap, child)\n    return result`,
+    "detects a cycle only when no job can start": `import heapq\ndef build_order(deps):\n    indegree = {name:len(items) for name,items in deps.items()}\n    children = {name:[] for name in deps}\n    for name,items in deps.items():\n        for item in items: children[item].append(name)\n    heap = [name for name in deps if indegree[name] == 0]\n    if deps and not heap: return []\n    heapq.heapify(heap)\n    result = []\n    while heap:\n        name = heapq.heappop(heap)\n        result.append(name)\n        for child in children[name]:\n            indegree[child] -= 1\n            if indegree[child] == 0: heapq.heappush(heap, child)\n    return result`,
+    "orders jobs by a sorted depth-first search": `def build_order(deps):\n    state, order = {}, []\n    def visit(job):\n        if state.get(job) == 1: raise ValueError("cycle")\n        if state.get(job) == 2: return\n        state[job] = 1\n        for item in sorted(deps[job]): visit(item)\n        state[job] = 2\n        order.append(job)\n    try:\n        for job in sorted(deps): visit(job)\n    except ValueError: return []\n    return order`,
+    "keeps scanning sorted names after each pick": `def build_order(deps):\n    order, done, progress = [], set(), True\n    while progress and len(order) < len(deps):\n        progress = False\n        for job in sorted(deps):\n            if job not in done and all(item in done for item in deps[job]):\n                order.append(job); done.add(job); progress = True\n    return order if len(order) == len(deps) else []`,
+  },
+  "test-engineer": {
+    "drops mid from the half-open interval": `def first_match(values, target):\n    lo, hi = 0, len(values)\n    while lo < hi:\n        mid = (lo + hi) // 2\n        if values[mid] < target: lo = mid + 1\n        else: hi = mid - 1\n    return lo if lo < len(values) and values[lo] == target else -1`,
+    "reads past the end for a target above every value": `from bisect import bisect_left\ndef first_match(values, target):\n    if not values: return -1\n    i = bisect_left(values, target)\n    return i if values[i] == target else -1`,
+  },
+  capacity: {
+    "takes modules greedily by value per hour": `def best_plan(hours, values, budget):\n    total = 0\n    for i in sorted(range(len(hours)), key=lambda i: values[i] / hours[i], reverse=True):\n        if hours[i] <= budget:\n            budget -= hours[i]\n            total += values[i]\n    return total`,
+    "keeps the better of that greedy plan and the best single module": `def best_plan(hours, values, budget):\n    total, left = 0, budget\n    for h, v in sorted(zip(hours, values), key=lambda hv: hv[1] / hv[0], reverse=True):\n        if h <= left:\n            left -= h\n            total += v\n    return max([total] + [v for h, v in zip(hours, values) if h <= budget])`,
+    "takes the shortest modules first": `def best_plan(hours, values, budget):\n    total = 0\n    for h, v in sorted(zip(hours, values)):\n        if h <= budget:\n            budget -= h\n            total += v\n    return total`,
+  },
+};
+
+for (const [id, wrong] of Object.entries(WRONG_SOLUTIONS)) for (const [mistake, code] of Object.entries(wrong)) test(`production Python harness: ${id} rejects code that ${mistake}`, () => {
+  const mission = missions.MISSIONS.find(m => m.id === id);
+  const actual = runPython(code, mission.functionName, mission.tests.map(test => test.args));
+  assert.ok(validateRunnerResult(actual, mission.tests.length)); assert.equal(actual.error, null);
+  assert.ok(mission.tests.some((test, index) => !passedCase(actual.results[index], test.expected, mission)), `all ${mission.tests.length} ${id} cases pass, so the lab would mark this mission complete`);
+});
+
 test("production harness gives calm syntax feedback and detects missing functions", () => {
   const invalid = runPython("def progress(x)\n    return x", "progress", [[1]]); assert.match(invalid.error, /Python paused near line/);
   const missing = runPython("x = 1", "progress", [[1]]); assert.match(missing.error, /Define a function named progress/);
@@ -272,6 +412,17 @@ test("runner keeps expected answers outside worker and isolates app origin", () 
   assert.match(ui, /runtime\/pyodide\/314\.0\.1\//);
   assert.match(worker, /import\(runtimeBase \+ "pyodide\.mjs"\)/);
   assert.ok(!ui.includes("cdn.jsdelivr.net") && !worker.includes("cdn.jsdelivr.net"));
+});
+
+test("the lab keeps runs of spaces in examples and case details, where a case's whitespace can be the point", () => {
+  // "Inner whitespace is kept" expects the key "good  first issue", with two spaces. HTML collapses runs of spaces
+  // unless white-space keeps them, and that key would then look like the next one, "good first issue".
+  const css = read("../app/components/Practice.tsx").match(/const LAB_CSS = `([\s\S]*?)`;/)[1];
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(([, selectors, body]) => ({ selectors: selectors.split(",").map(selector => selector.trim()), body }));
+  for (const selector of [".lab-samples code", ".lab-samples strong", ".lab-case code"]) {
+    const values = rules.filter(rule => rule.selectors.includes(selector)).flatMap(rule => [...rule.body.matchAll(/(?:^|;)\s*white-space\s*:\s*([^;]+)/g)].map(match => match[1].trim()));
+    assert.equal(values.at(-1), "pre-wrap", `${selector} must keep runs of spaces`);
+  }
 });
 
 test("runtime copy does not promise a cached download that the opaque sandbox cannot reuse", () => {
@@ -314,6 +465,58 @@ test("runner waits for matching worker termination before removing its sandbox, 
 });
 
 
+test("practice storage shows other tabs' saves and deletions after its view was closed, and keeps unsaved drafts", () => {
+  // A closed Practice view hears no storage events, so a cached copy of a saved value would be stale when it reopens.
+  const oldStorage = globalThis.localStorage, oldWindow = globalThis.window;
+  const entries = new Map(); let full = false;
+  globalThis.localStorage = {
+    get length() { return entries.size; }, key(index) { return [...entries.keys()][index] ?? null; },
+    getItem(key) { return entries.get(key) ?? null; }, removeItem(key) { entries.delete(key); },
+    setItem(key, value) { if (full) throw new Error("QuotaExceededError"); entries.set(key, value); },
+  };
+  globalThis.window = new EventTarget();
+  const draft = "forge.lab.user.tabs.code.progress", completed = "forge.lab.user.tabs.completed";
+  try {
+    assert.equal(writeStore(draft, "tab A draft"), true); assert.equal(writeStore(completed, '["progress"]'), true);
+    entries.set(draft, "tab B draft"); entries.set(completed, '["progress","study-streak"]');
+    assert.equal(readStore(draft, "starter"), "tab B draft"); assert.equal(readStore(completed, "[]"), '["progress","study-streak"]');
+    entries.clear(); entries.set("forge.lab.user.tabs.epoch", "deleted in tab B");
+    assert.equal(readStore(draft, "starter"), "starter"); assert.equal(readStore(completed, "[]"), "[]");
+    full = true;
+    assert.equal(writeStore(draft, "unsaved draft"), false); assert.equal(readStore(draft, "starter"), "unsaved draft");
+    full = false;
+    assert.equal(writeStore(draft, "saved draft"), true); entries.set(draft, "tab B draft again");
+    assert.equal(readStore(draft, "starter"), "tab B draft again");
+  } finally { globalThis.localStorage = oldStorage; globalThis.window = oldWindow; }
+});
+
+test("a lab draft kept in memory after a failed save does not outlive a deletion made in another tab", () => {
+  // Tab B's Delete my learning data removes saved keys and writes a new epoch. A draft that never reached storage
+  // has no key to remove, and a closed Practice view hears no events, so the epoch alone must retire it.
+  const oldStorage = globalThis.localStorage, oldWindow = globalThis.window;
+  const entries = new Map(); let full = true, blocked = false;
+  globalThis.localStorage = {
+    get length() { return entries.size; }, key(index) { return [...entries.keys()][index] ?? null; },
+    getItem(key) { if (blocked) throw new Error("SecurityError"); return entries.get(key) ?? null; }, removeItem(key) { entries.delete(key); },
+    setItem(key, value) { if (full || blocked) throw new Error("QuotaExceededError"); entries.set(key, value); },
+  };
+  globalThis.window = new EventTarget();
+  const mine = "forge.lab.user.tabs.code.progress", completed = "forge.lab.user.tabs.completed", theirs = "forge.lab.user.other.code.progress";
+  try {
+    assert.equal(writeStore(mine, "unsaved draft"), false); assert.equal(writeStore(completed, '["progress"]'), false);
+    assert.equal(writeStore(theirs, "another learner's unsaved draft"), false);
+    full = false; entries.set("forge.lab.user.tabs.epoch", "deleted in tab B");
+    assert.equal(readStore(mine, "starter"), "starter"); assert.equal(readStore(completed, "[]"), "[]");
+    assert.equal(writeStore(mine, "starter and one keystroke"), true); assert.equal(entries.get(mine), "starter and one keystroke");
+    assert.equal(readStore(theirs, "starter"), "another learner's unsaved draft", "only the deleting learner's drafts are retired");
+    entries.set("forge.lab.epoch", "every learner deleted");
+    assert.equal(readStore(theirs, "starter"), "starter");
+    // Storage that cannot be read at all gives no epoch to compare, and memory holds the only copy of each draft.
+    blocked = true;
+    assert.equal(writeStore(mine, "draft with storage blocked"), false); assert.equal(readStore(mine, "starter"), "draft with storage blocked");
+  } finally { globalThis.localStorage = oldStorage; globalThis.window = oldWindow; }
+});
+
 test("confirmed deletion clears same-tab practice cache and signals active runtimes", () => {
   const oldStorage = globalThis.localStorage, oldWindow = globalThis.window;
   const entries = new Map([["unrelated", "keep"]]);
@@ -335,4 +538,31 @@ test("confirmed deletion clears same-tab practice cache and signals active runti
     assert.equal(readStore("forge.lab.completed", "[]"), "[]");
     assert.equal(entries.get("unrelated"), "keep"); assert.equal(stopped, 2);
   } finally { globalThis.localStorage = oldStorage; globalThis.window = oldWindow; }
+});
+
+test("the learning-record export includes the lab's drafts and completed missions, which deletion clears", () => {
+  // Learners are told to export before changing browsers and to download a backup before deleting their data,
+  // and deletion also clears the lab. An export without the lab's code would leave those drafts with no copy.
+  const oldStorage = globalThis.localStorage, oldWindow = globalThis.window;
+  const entries = new Map(); let full = false;
+  globalThis.localStorage = {
+    get length() { return entries.size; }, key(index) { return [...entries.keys()][index] ?? null; },
+    getItem(key) { return entries.get(key) ?? null; }, removeItem(key) { entries.delete(key); },
+    setItem(key, value) { if (full) throw new Error("QuotaExceededError"); entries.set(key, value); },
+  };
+  globalThis.window = new EventTarget();
+  const [solved, untouched, unsaved] = missions.MISSIONS, prefix = "forge.lab.user.exporter.";
+  try {
+    writeStore(`${prefix}code.${solved.id}`, "def progress(completed, goal):\n    return 42\n");
+    writeStore(`${prefix}code.${untouched.id}`, untouched.starter);
+    writeStore(`${prefix}completed`, JSON.stringify([solved.id, "retired-mission"]));
+    writeStore(`forge.lab.user.someone-else.code.${solved.id}`, "another learner's draft");
+    full = true; writeStore(`${prefix}code.${unsaved.id}`, "kept in this tab only"); full = false;
+    assert.deepEqual(practiceRecord("exporter"), { completed: [solved.id], drafts: { [solved.id]: "def progress(completed, goal):\n    return 42\n", [unsaved.id]: "kept in this tab only" } });
+    resetPracticeStorage("exporter");
+    assert.deepEqual(practiceRecord("exporter"), { completed: [], drafts: {} });
+  } finally { globalThis.localStorage = oldStorage; globalThis.window = oldWindow; }
+  // Forge needs React and a browser, so check only that the exported object carries the lab's record.
+  const forge = read("../app/components/Forge.tsx").replace(/\s+/g, "");
+  assert.match(forge, /download\(['"]forge-progress\.json['"],JSON\.stringify\(\{[^}]*\bpracticeLab:practiceRecord\(userKey\)/, "Export my learning record must include the lab's drafts and completed missions");
 });

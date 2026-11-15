@@ -99,6 +99,100 @@ test("reset retains revision tombstones and retries return current state without
   await body(await request("POST", operation({ action: "deleteData", confirm: "yes", revision: 3 })), 400);
 });
 
+// A receipt's payload hash is an unsalted SHA-256 of the save, which anyone who reads this storage can match against guesses.
+const canonical = value => value === null || typeof value !== "object" ? JSON.stringify(value) : Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+async function payloadHash(save) {
+  const { operationId, ...payload } = progress.validateAction(save); void operationId;
+  return Buffer.from(await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical(payload)))).toString("hex");
+}
+
+test("deleted saves leave nothing in browser storage that depends on their contents, and retries of them are still answered", async () => {
+  const ids = Array.from({ length: 4 }, () => webcrypto.randomUUID());
+  const histories = [
+    [profile({ name: "Sanjay", weeklyHours: 15 }), operation({ minutes: 137, note: "Focus timer session" }), operation({ action: "recordAttempt", missionId: "capacity", passed: 2, total: 7, category: "logic" })],
+    [profile({ name: "Explorer", weeklyHours: 20 }), operation({ minutes: 25, note: "Focus timer session" }), operation({ action: "recordAttempt", missionId: "network", passed: 6, total: 6, category: "success" })],
+  ];
+  const stored = [];
+  for (const history of histories) {
+    const { request, storage } = fixture();
+    const saves = history.map((save, revision) => ({ ...save, revision, operationId: ids[revision] }));
+    for (const save of saves) await body(await request("POST", save));
+    const deletion = operation({ action: "deleteData", confirm: "DELETE MY DATA", revision: saves.length, operationId: ids[saves.length] });
+    await body(await request("POST", deletion));
+    const raw = storage.getItem(BROWSER_PROGRESS_KEY); stored.push(raw);
+    for (const save of saves) assert.ok(!raw.includes(await payloadHash(save)), `the hash of a deleted ${save.action} is still stored`);
+    // A delete's payload is fixed by its revision, so its own hash reveals nothing. A tab still on the earlier
+    // release compares hashes only, and must be able to retry its unconfirmed delete and then clear local drafts.
+    assert.equal(JSON.parse(raw).receipts.at(-1).payloadHash, await payloadHash(deletion), "the delete's own receipt keeps its hash");
+    const otherTab = Object.assign(new Storage(), { values: storage.values });
+    await body(await fixture(otherTab).request("GET")); assert.equal(otherTab.writes, 0, "another tab's read finds nothing left to erase");
+    for (const save of saves) {
+      const replay = await body(await request("POST", save));
+      assert.equal(replay.replayed, true); assert.deepEqual(replay.state, progress.emptyState());
+    }
+    const reused = await body(await request("POST", operation({ revision: saves.length + 1, operationId: ids[0] })), 409);
+    assert.equal(reused.code, "operation_conflict");
+  }
+  assert.equal(stored[0], stored[1], "what a delete leaves in storage must not depend on what was deleted");
+});
+
+test("a record deleted before receipts were erased has their payload hashes erased when it is next read", async () => {
+  const { request, storage } = fixture();
+  const saves = [profile({ name: "Sanjay", weeklyHours: 15 }), operation({ revision: 1, minutes: 137, note: "Focus timer session" })];
+  for (const save of saves) await body(await request("POST", save));
+  // What the earlier release stored: its delete receipt and the receipts before it kept their payload hashes.
+  const envelope = JSON.parse(storage.getItem(BROWSER_PROGRESS_KEY));
+  const deletion = { action: "deleteData", confirm: "DELETE MY DATA", revision: 2, operationId: webcrypto.randomUUID() };
+  envelope.receipts.push({ operationId: deletion.operationId, payloadHash: await payloadHash(deletion), appliedRevision: 3 });
+  Object.assign(envelope, { revision: 3, state: progress.emptyState() });
+  storage.setItem(BROWSER_PROGRESS_KEY, JSON.stringify(envelope));
+  const later = operation({ revision: 3, note: "Work after the delete" });
+  const saved = await body(await request("POST", later));
+  const legacy = storage.getItem(BROWSER_PROGRESS_KEY);
+  for (const save of [...saves, deletion]) assert.ok(legacy.includes(await payloadHash(save)));
+  const read = await body(await request("GET"));
+  assert.deepEqual(read.state, saved.state); assert.equal(read.revision, 4);
+  const erased = storage.getItem(BROWSER_PROGRESS_KEY);
+  for (const save of saves) assert.ok(!erased.includes(await payloadHash(save)), `the hash of a deleted ${save.action} is still stored`);
+  // The delete's own payload is fixed by its revision. Keeping its hash lets the earlier release, which compares
+  // hashes only, still answer that tab's retry of the delete, so it goes on to clear the lab and project drafts.
+  assert.ok(erased.includes(await payloadHash(deletion)), "the delete's own receipt keeps its hash");
+  assert.ok(erased.includes(await payloadHash(later)), "receipts after the delete keep their hashes");
+  const writes = storage.writes; await body(await request("GET")); assert.equal(storage.writes, writes, "reads rewrite the record only to erase hashes");
+  // A tab opened later has checked nothing yet, and finds the delete already handled.
+  const laterTab = Object.assign(new Storage(), { values: storage.values });
+  await body(await fixture(laterTab).request("GET")); assert.equal(laterTab.writes, 0, "a handled delete is not rewritten by each new tab");
+  for (const save of [...saves, deletion, later]) assert.equal((await body(await request("POST", save))).replayed, true);
+  assert.equal((await body(await request("POST", { ...later, minutes: 50 }), 409)).code, "operation_conflict");
+  assert.deepEqual((await body(await request("GET"))).state, saved.state);
+});
+
+test("reads look for an earlier release's deletion only in receipts added since this tab's last read", async () => {
+  // Forge reads again on every storage event from another tab, so a read must not hash all 256 receipts each time.
+  let digests = 0;
+  const subtle = { digest: (...args) => { digests++; return webcrypto.subtle.digest(...args); } };
+  const storage = new Storage();
+  const request = createBrowserProgressRequest({ storage, locks: new Locks(), crypto: { randomUUID: () => webcrypto.randomUUID(), subtle }, now: () => new Date("2026-10-30T00:00:00.000Z") });
+  for (let revision = 0; revision < BROWSER_RECEIPT_LIMIT + 10; revision++) await body(await request("POST", operation({ revision })));
+  const digestsForRead = async () => { digests = 0; await body(await request("GET")); return digests; };
+  assert.equal(await digestsForRead(), BROWSER_RECEIPT_LIMIT, "the first read checks every receipt");
+  assert.equal(await digestsForRead(), 0, "the next read has nothing new to check");
+  await body(await request("POST", operation({ revision: BROWSER_RECEIPT_LIMIT + 10 })));
+  assert.equal(await digestsForRead(), 1);
+  // An earlier release's delete, added after this tab's last read, is still found, and the hashes before it are erased once.
+  const envelope = JSON.parse(storage.getItem(BROWSER_PROGRESS_KEY));
+  const deletion = { action: "deleteData", confirm: "DELETE MY DATA", revision: envelope.revision, operationId: webcrypto.randomUUID() };
+  envelope.receipts = [...envelope.receipts, { operationId: deletion.operationId, payloadHash: await payloadHash(deletion), appliedRevision: envelope.revision + 1 }].slice(-BROWSER_RECEIPT_LIMIT);
+  Object.assign(envelope, { revision: envelope.revision + 1, state: progress.emptyState() });
+  storage.setItem(BROWSER_PROGRESS_KEY, JSON.stringify(envelope));
+  const writes = storage.writes;
+  assert.equal(await digestsForRead(), 1); assert.equal(storage.writes, writes + 1);
+  const receipts = JSON.parse(storage.getItem(BROWSER_PROGRESS_KEY)).receipts;
+  assert.ok(receipts.slice(0, -1).every(receipt => receipt.payloadHash === "0".repeat(64)), "every hash before the delete is erased");
+  assert.equal(receipts.at(-1).payloadHash, await payloadHash(deletion));
+  assert.equal(await digestsForRead(), 0); assert.equal(storage.writes, writes + 1, "a handled delete is not rewritten");
+});
+
 test("receipts remain bounded and an evicted old retry cannot reapply", async () => {
   const { request, storage } = fixture(); const first = profile();
   await body(await request("POST", first));
@@ -187,6 +281,49 @@ test("the shared workspace byte ceiling rejects a large update without losing ex
   await body(await request("POST", operation({ action: "saveProject", revision: 19, id: "project-19", title: "One too many bytes", description: "", code: source, files: [{ path: "main.py", content: source }], repoUrl: "", status: "draft" })), 413);
   assert.equal(storage.getItem(BROWSER_PROGRESS_KEY), before);
   const latest = await body(await request("GET")); assert.equal(latest.revision, 19); assert.equal(latest.state.projects.length, 19);
+});
+
+test("a project save's size is predicted exactly, so the Projects editor can stop one that cannot fit", async () => {
+  // The editor allows 20 projects of up to 160,000 bytes, but they share the 1,500,000-byte record with practice
+  // history and notes, and main.py is stored again as code: the 8th full-size project cannot be saved.
+  // components.test.mjs renders the editor with these numbers.
+  const { request } = fixture();
+  const line = "    total = total + compute(item, index)  # typical Python line\n";
+  const files = (size, count = 4) => ["main.py", "test_main.py", "README.md", "notes.md"].slice(0, count).map(path => ({ path, content: line.repeat(Math.ceil(size / line.length)).slice(0, size) }));
+  const project = (id, projectFiles) => ({ action: "saveProject", id, templateId: "study-tracker", title: ` Project ${id} `, description: "", code: projectFiles[0].content, files: projectFiles, repoUrl: "https://github.com/example/project/", status: "draft" });
+  let saved = await body(await request("GET")), rejected = [];
+  const saves = [...Array.from({ length: 8 }, (_, index) => project(`full-${index}`, files(40_000))), project("full-0", files(1_000, 1)), project("full-1", files(20_000, 2)), project("small", files(500, 1)), project("full-0", files(30_000, 3))];
+  for (const save of saves) {
+    const predicted = progress.savedBytes(saved.state) + progress.projectSaveBytes(saved.state.projects, progress.validateAction({ ...save, revision: saved.revision }));
+    const response = await request("POST", { ...save, revision: saved.revision, operationId: webcrypto.randomUUID() });
+    if (predicted > progress.MAX_STATE_BYTES) { await body(response, 413); rejected.push(save.id); continue; }
+    saved = await body(response);
+    assert.equal(progress.savedBytes(saved.state), predicted, `saving ${save.id} used a size the editor did not predict`);
+  }
+  assert.deepEqual(rejected, ["full-7"]);
+  // Forge needs React and a browser, so check only what it gives the editor.
+  const forge = read("../app/components/Forge.tsx").replace(/\s+/g, ""), from = forge.indexOf("<Projects"), element = forge.slice(from, forge.indexOf("/>", from));
+  assert.ok(from >= 0 && element.includes("usedBytes={usedBytes}") && element.includes("reservedBytes={reservedBytes}"), "Forge must give the Projects editor the bytes in use and the room kept for practice results");
+  assert.ok(forge.includes("savedBytes(state)") && forge.includes("practiceHistoryReserve(state.attempts)"), "Forge must measure the saved record and the practice history it holds");
+});
+
+test("the room kept for the practice history covers every practice result it can still take", () => {
+  // applyAction keeps the latest 500 attempts. A record whose size plus this room fits MAX_STATE_BYTES takes the
+  // next practice result whatever its size, so the Projects editor keeps the room free when projects grow.
+  const largest = { action: "recordAttempt", revision: 0, missionId: "m".repeat(80), passed: 999, total: 1000, category: "performance" };
+  const typical = { action: "recordAttempt", revision: 0, missionId: "progress", passed: 9, total: 9, category: "success" };
+  let state = progress.emptyState();
+  const record = save => {
+    const before = progress.savedBytes(state), room = progress.practiceHistoryReserve(state.attempts);
+    state = progress.applyAction(state, progress.validateAction(save), "2026-10-30T00:00:00.000Z", webcrypto.randomUUID());
+    assert.ok(progress.savedBytes(state) - before <= room, `a practice result grew the record by more than the ${room} bytes kept for it`);
+  };
+  for (let index = 0; index < 700; index++) record(index % 3 ? typical : largest);
+  assert.equal(state.attempts.length, 500);
+  // The room is exact: 500 of the largest attempts use all of it.
+  for (let index = 0; index < 500; index++) record(largest);
+  assert.equal(progress.practiceHistoryReserve(state.attempts), 0);
+  assert.equal(progress.savedBytes(state.attempts) - progress.savedBytes([]), progress.practiceHistoryReserve([]));
 });
 
 test("the default adapter is importable without a browser and fails clearly when called there", async () => {

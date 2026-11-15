@@ -26,14 +26,49 @@ export function gitChanges(state: GitState) {
   return { staged, changed, untracked };
 }
 function isClean(state: GitState) { const changes = gitChanges(state); return !changes.staged.length && !changes.changed.length && !changes.untracked.length; }
-function ancestors(state: GitState, ...ids: string[]) {
+function ancestors(commits: SimCommit[], ...ids: string[]) {
   const seen = new Map<string, number>(); const queue: [string, number][] = ids.map(id => [id, 0]);
   for (let i = 0; i < queue.length; i++) {
     const [current, depth] = queue[i]; if (seen.has(current)) continue; seen.set(current, depth);
-    const commit = state.commits.find(item => item.id === current);
+    const commit = commits.find(item => item.id === current);
     for (const parent of commit?.parents || []) queue.push([parent, depth + 1]);
   }
   return seen;
+}
+/** Like git merge-base --all: the common ancestors that no other common ancestor already contains, oldest first. */
+function mergeBases(commits: SimCommit[], ours: string, theirs: string) {
+  const ourAncestors = ancestors(commits, ours); const theirAncestors = ancestors(commits, theirs);
+  const shared = [...ourAncestors.keys()].filter(id => theirAncestors.has(id));
+  const older = ancestors(commits, ...shared.flatMap(id => commits.find(commit => commit.id === id)!.parents));
+  return commits.filter(commit => shared.includes(commit.id) && !older.has(commit.id));
+}
+/** File-level three-way merge. A virtual base keeps the base version of a modify/delete conflict, as git does. */
+function mergeFiles(base: Snapshot, ours: Snapshot, theirs: Snapshot, labels: [string, string], virtual = false) {
+  const merged: Snapshot = {}; const conflicts: string[] = [];
+  for (const file of new Set([...Object.keys(base), ...Object.keys(ours), ...Object.keys(theirs)])) {
+    const original = base[file], a = ours[file], b = theirs[file];
+    let value: string | undefined;
+    if (a === b) value = a; else if (a === original) value = b; else if (b === original) value = a;
+    else { conflicts.push(file); value = virtual && (a === undefined || b === undefined) ? original : `<<<<<<< ${labels[0]}\n${a || ""}\n=======\n${b || ""}\n>>>>>>> ${labels[1]}\n`; }
+    if (value !== undefined) merged[file] = value;
+  }
+  return { merged, conflicts };
+}
+/**
+ * The snapshot to merge against. With several best common ancestors (a criss-cross history), git's ort and
+ * recursive strategies first merge those ancestors into one virtual base; picking just one of them could
+ * silently undo a revert or a conflict resolution committed on either side.
+ */
+function mergeBaseFiles(commits: SimCommit[], ours: string, theirs: string): Snapshot | null {
+  const [first, ...others] = mergeBases(commits, ours, theirs);
+  if (!first) return null;
+  let base = first;
+  for (const next of others) {
+    const files = mergeFiles(mergeBaseFiles(commits, base.id, next.id) || {}, base.files, next.files, ["Temporary merge branch 1", "Temporary merge branch 2"], true).merged;
+    base = { id: `virtual-${commits.length}`, message: "Merged common ancestors", parents: [base.id, next.id], files, branch: base.branch };
+    commits = [...commits, base];
+  }
+  return base.files;
 }
 function makeCommit(state: GitState, message: string, parents = [state.branches[state.branch]]) {
   const id = `c${String(state.commits.length + 1).padStart(6, "0")}`;
@@ -107,7 +142,10 @@ export function runGitCommand(previous: GitState, command: string): GitResponse 
     const paths = args[0] === "." ? [...new Set([...Object.keys(state.working), ...Object.keys(state.index)])] : args;
     for (const file of paths) {
       if (!own(state.working, file) && !own(state.index, file)) return reply(`No file named ${file}. Select an existing file in the editor.`);
-      if (state.merge?.conflicts.includes(file) && /^(<{7}|={7}|>{7})/m.test(state.working[file] || "")) return reply(`Resolve the conflict markers in ${file} before staging it in this lab.`);
+      // Like git diff --check, a leftover marker is exactly seven <, = or > followed by a space or the line end,
+      // so a Markdown or reST underline of another length still stages.
+      const marker = state.merge?.conflicts.includes(file) ? (state.working[file] || "").split("\n").findIndex(line => /^([<=>])\1{6}(\s|$)/.test(line)) : -1;
+      if (marker >= 0) return reply(`Resolve the conflict markers in ${file} before staging it in this lab. Line ${marker + 1} still looks like one.\nLike git diff --check, this lab treats a line that starts with exactly seven <, = or > followed by a space or the line end as a marker. If that line is a heading underline, make it longer or shorter.`);
     }
     for (const file of paths) {
       if (own(state.working, file)) state.index[file] = state.working[file]; else delete state.index[file];
@@ -126,7 +164,8 @@ export function runGitCommand(previous: GitState, command: string): GitResponse 
   }
   if (verb === "branch" && args.length === 0) return reply(Object.keys(state.branches).map(name => `${name === state.branch ? "*" : " "} ${name} → ${state.branches[name]}`).join("\n"));
   if ((verb === "branch" && args.length === 1) || (verb === "switch" && args[0] === "-c" && args.length === 2)) {
-    if (state.merge) return reply("Finish or abort the current merge before creating a branch.");
+    // Real git creates the branch at HEAD during a merge; only switching to it must wait.
+    if (state.merge && verb === "switch") return reply("Finish or abort the current merge before switching branches.");
     const name = verb === "branch" ? args[0] : args[1];
     if (!validBranch(name) || name === "__proto__" || name === "constructor" || name === "prototype") return reply("Use a short branch name like feature/streak, with letters, numbers, slashes, dashes, or underscores.");
     if (own(state.branches, name)) return reply(`Branch ${name} already exists. Use git switch ${name}.`);
@@ -144,7 +183,7 @@ export function runGitCommand(previous: GitState, command: string): GitResponse 
     return reply(`Switched to branch ${state.branch}. The files now match its latest snapshot.`);
   }
   if (verb === "log") {
-    const reachable = ancestors(state, state.branches[state.branch]);
+    const reachable = ancestors(state.commits, state.branches[state.branch]);
     return reply(state.commits.filter(commit => reachable.has(commit.id)).reverse().map(commit => {
       const labels = Object.entries(state.branches).filter(([, id]) => id === commit.id).map(([branch]) => branch === state.branch ? `HEAD → ${branch}` : branch);
       return `${commit.id}${labels.length ? ` (${labels.join(", ")})` : ""}\n  ${commit.message}${commit.parents.length > 1 ? `\n  Merge parents: ${commit.parents.join(" ")}` : ""}`;
@@ -181,27 +220,14 @@ export function runGitCommand(previous: GitState, command: string): GitResponse 
     if (state.merge) return reply("A merge is already in progress. Resolve it or use git merge --abort.");
     if (!isClean(state)) return reply("Commit or restore working changes before merging in this lab.");
     const ours = head(state); const target = state.branches[args[0]]; const theirs = state.commits.find(commit => commit.id === target)!;
-    const ourAncestors = ancestors(state, ours.id); const theirAncestors = ancestors(state, target);
-    if (ourAncestors.has(target)) return reply("Already up to date: that branch's history is already included here.");
-    if (theirAncestors.has(ours.id)) {
+    if (ancestors(state.commits, ours.id).has(target)) return reply("Already up to date: that branch's history is already included here.");
+    if (ancestors(state.commits, target).has(ours.id)) {
       state.branches[state.branch] = target; state.working = { ...theirs.files }; state.index = { ...theirs.files };
       return reply(`Fast-forward: ${state.branch} now points to ${target}. No extra commit was needed because its previous tip was an ancestor.`);
     }
-    const shared = [...ourAncestors.keys()].filter(id => theirAncestors.has(id));
-    // Like git merge-base, never use a common ancestor that another common ancestor already contains.
-    const older = ancestors(state, ...shared.flatMap(id => state.commits.find(commit => commit.id === id)!.parents));
-    const common = shared.filter(id => !older.has(id)).sort((a, b) => ourAncestors.get(a)! + theirAncestors.get(a)! - ourAncestors.get(b)! - theirAncestors.get(b)!)[0];
-    if (!common) return reply("These histories have no common ancestor; this simulator does not combine unrelated repositories.");
-    const base = state.commits.find(commit => commit.id === common)!.files;
-    const files = [...new Set([...Object.keys(base), ...Object.keys(ours.files), ...Object.keys(theirs.files)])];
-    const merged: Snapshot = {}; const conflicts: string[] = [];
-    for (const file of files) {
-      const original = base[file], a = ours.files[file], b = theirs.files[file];
-      let value: string | undefined;
-      if (a === b) value = a; else if (a === original) value = b; else if (b === original) value = a;
-      else { conflicts.push(file); value = `<<<<<<< HEAD\n${a || ""}\n=======\n${b || ""}\n>>>>>>> ${args[0]}\n`; }
-      if (value !== undefined) merged[file] = value;
-    }
+    const base = mergeBaseFiles(state.commits, ours.id, target);
+    if (!base) return reply("These histories have no common ancestor; this simulator does not combine unrelated repositories.");
+    const { merged, conflicts } = mergeFiles(base, ours.files, theirs.files, ["HEAD", args[0]]);
     state.working = merged; state.index = { ...merged };
     if (conflicts.length) {
       for (const file of conflicts) { if (own(ours.files, file)) state.index[file] = ours.files[file]; else delete state.index[file]; }
