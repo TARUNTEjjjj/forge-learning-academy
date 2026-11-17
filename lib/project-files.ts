@@ -120,20 +120,29 @@ export function createProjectZip(files: ProjectFile[]): Uint8Array<ArrayBuffer> 
 
 export const PROJECT_TEMPLATES=[{id:'study-tracker',title:'Study session tracker',description:'A small command-line tool that turns study minutes into a useful weekly report. Add tests, validation, and a clear README.',level:'FIRST BUILD',skills:['Python','Files','Testing'],brief:'Build a command-line study tracker. A session has a date, topic, and duration. Save sessions in JSON, summarize totals by topic, and reject negative durations. Add a helpful usage message.',code:`"""Forge study tracker: a small program you can make your own."""
 import json
+import math
 from pathlib import Path
 
 
 def summarize(sessions):
-    """Return total minutes for each topic. Reject invalid durations."""
+    """Return total minutes for each topic. Require positive finite numbers."""
     totals = {}
     for session in sessions:
         minutes = session["minutes"]
-        if not isinstance(minutes, (int, float)) or minutes <= 0:
-            raise ValueError("Session minutes must be positive")
+        if isinstance(minutes, bool) or not isinstance(minutes, (int, float)) or minutes <= 0:
+            raise ValueError("Session minutes must be positive finite numbers")
+        if isinstance(minutes, float) and not math.isfinite(minutes):
+            raise ValueError("Session minutes must be positive finite numbers")
         topic = session["topic"].strip()
         if not topic:
             raise ValueError("A topic is required")
-        totals[topic] = totals.get(topic, 0) + minutes
+        try:
+            total = totals.get(topic, 0) + minutes
+        except OverflowError:
+            raise ValueError("Topic total is too large") from None
+        if isinstance(total, float) and not math.isfinite(total):
+            raise ValueError("Topic total is too large")
+        totals[topic] = total
     return totals
 
 
@@ -159,6 +168,15 @@ class StudyTrackerTests(unittest.TestCase):
     def test_negative_minutes(self):
         with self.assertRaises(ValueError):
             summarize([{"topic":"Git","minutes":-1}])
+    def test_rejects_booleans_and_nonfinite_minutes(self):
+        for minutes in [True, False, float("nan"), float("inf"), -float("inf")]:
+            with self.subTest(minutes=minutes), self.assertRaises(ValueError):
+                summarize([{"topic":"Git","minutes":minutes}])
+    def test_large_integer_minutes_remain_exact(self):
+        self.assertEqual(summarize([{"topic":"Git","minutes":10**400}]), {"Git":10**400})
+    def test_rejects_overflowing_topic_total(self):
+        with self.assertRaises(ValueError):
+            summarize([{"topic":"Git","minutes":1e308}, {"topic":"Git","minutes":1e308}])
 
 if __name__ == "__main__":
     unittest.main()
