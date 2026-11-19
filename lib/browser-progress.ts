@@ -1,4 +1,5 @@
 import { applyAction, emptyState, MAX_REQUEST_BYTES, MAX_STATE_BYTES, ProgressError, progressResponse, validateAction, type LearnerState, type ProgressAction } from "./progress";
+import { canonical, MAX_IMPORT_REQUEST_BYTES, restoredState, validateImportAction, validateLearnerState, type ImportAction } from "./learning-record";
 
 /** One workspace per browser origin. This is not an account or an authentication credential. */
 export const BROWSER_WORKSPACE_ID = "browser-local";
@@ -32,12 +33,6 @@ export type BrowserProgressDependencies = {
 function json(body: unknown, status = 200): Response {
   return Response.json(body, { status, headers: responseHeaders });
 }
-function canonical(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${canonical(record[key])}`).join(",")}}`;
-}
 async function payloadDigest(cryptoApi: Pick<Crypto, "subtle">, payload: unknown) {
   const digest = await cryptoApi.subtle.digest("SHA-256", encoder.encode(canonical(payload)));
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
@@ -67,61 +62,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function corrupt(): never {
   throw new ProgressError("Saved browser progress is damaged or uses an unsupported format. It has not been overwritten. Keep a copy of your browser data before clearing this site's storage.", 503, "browser_storage_corrupt");
 }
-function timestamp(value: unknown): asserts value is string {
-  if (typeof value !== "string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) || !Number.isFinite(Date.parse(value))) corrupt();
-}
-function rows(value: unknown, maximum: number): Record<string, unknown>[] {
-  if (!Array.isArray(value) || value.length > maximum || !value.every(isRecord)) corrupt();
-  return value;
-}
-function uniqueIds(values: Record<string, unknown>[], uuid = true) {
-  const ids = new Set();
-  for (const value of values) {
-    if (typeof value.id !== "string" || (uuid && !UUID.test(value.id)) || ids.has(value.id)) corrupt();
-    ids.add(value.id);
-  }
-}
-
 /** Validate persisted data as strictly as new updates; malformed data is never silently replaced. */
-function validateState(value: unknown): LearnerState {
-  if (!isRecord(value) || !isRecord(value.profile) || !isRecord(value.modules) || Object.keys(value.modules).length > 200) corrupt();
-  if (encoder.encode(JSON.stringify(value)).byteLength > MAX_STATE_BYTES) corrupt();
-  const profile = validateAction({ ...value.profile, revision: 0, action: "saveProfile" });
-  if (profile.action !== "saveProfile") corrupt();
-  const normalized: LearnerState = { ...emptyState(), profile: { name: profile.name, weeklyHours: profile.weeklyHours, language: profile.language } };
-  for (const [moduleId, entry] of Object.entries(value.modules)) {
-    if (!isRecord(entry)) corrupt();
-    timestamp(entry.updatedAt);
-    const action = validateAction({ ...entry, revision: 0, action: "setModule", moduleId });
-    if (action.action !== "setModule") corrupt();
-    normalized.modules[moduleId] = { complete: action.complete, evidence: action.evidence, updatedAt: entry.updatedAt };
-  }
-  const sessions = rows(value.sessions, 5000); uniqueIds(sessions);
-  normalized.sessions = sessions.map(entry => {
-    timestamp(entry.createdAt);
-    const action = validateAction({ ...entry, revision: 0, action: "logSession" });
-    if (action.action !== "logSession") corrupt();
-    return { id: entry.id as string, minutes: action.minutes, note: action.note, createdAt: entry.createdAt };
-  });
-  const projects = rows(value.projects, 20); uniqueIds(projects, false);
-  normalized.projects = projects.map(entry => {
-    timestamp(entry.updatedAt);
-    const action = validateAction({ ...entry, revision: 0, action: "saveProject" });
-    if (action.action !== "saveProject") corrupt();
-    const { action: ignoredAction, revision: ignoredRevision, operationId: ignoredId, ...project } = action;
-    void ignoredAction; void ignoredRevision; void ignoredId;
-    return { ...project, updatedAt: entry.updatedAt };
-  });
-  const attempts = rows(value.attempts, 500); uniqueIds(attempts);
-  normalized.attempts = attempts.map(entry => {
-    timestamp(entry.createdAt);
-    const action = validateAction({ ...entry, revision: 0, action: "recordAttempt" });
-    if (action.action !== "recordAttempt" || entry.source !== "browser-self-report") corrupt();
-    return { id: entry.id as string, missionId: action.missionId, passed: action.passed, total: action.total, category: action.category, createdAt: entry.createdAt, source: "browser-self-report" };
-  });
-  if (canonical(normalized) !== canonical(value)) corrupt();
-  return normalized;
-}
+const validateState = (value: unknown) => validateLearnerState(value, corrupt);
 
 function readEnvelope(storage: BrowserProgressStorage): Envelope | null {
   const raw = storage.getItem(BROWSER_PROGRESS_KEY);
@@ -164,15 +106,18 @@ export function createBrowserProgressRequest(dependencies: BrowserProgressDepend
       if (method !== "GET" && method !== "POST") return json({ error: "Use GET or POST.", code: "method_not_allowed" }, 405);
       if (!dependencies.locks || typeof dependencies.locks.request !== "function") throw new ProgressError("This browser cannot coordinate safe saves across tabs. Use a current browser over HTTPS to save progress.", 503, "browser_locks_unavailable");
       const cryptoApi = dependencies.crypto ?? globalThis.crypto;
-      let action: ProgressAction | undefined;
+      let action: ProgressAction | ImportAction | undefined;
       let operationId = "";
       let payloadHash = "";
       if (method === "POST") {
         let serialized: string | undefined;
         try { serialized = JSON.stringify(payload); } catch { throw new ProgressError("The update is not valid JSON."); }
         if (serialized === undefined) throw new ProgressError("An update body is required.");
-        if (encoder.encode(serialized).byteLength > MAX_REQUEST_BYTES) throw new ProgressError(`This update is too large. Keep the complete update under ${MAX_REQUEST_BYTES.toLocaleString("en-US")} bytes.`, 413);
-        action = validateAction(JSON.parse(serialized));
+        // Restoring a learning record sends a complete saved record, so it has the saved record's larger limit.
+        const restoring = isRecord(payload) && payload.action === "importRecord";
+        const limit = restoring ? MAX_IMPORT_REQUEST_BYTES : MAX_REQUEST_BYTES;
+        if (encoder.encode(serialized).byteLength > limit) throw new ProgressError(`This update is too large. Keep the complete update under ${limit.toLocaleString("en-US")} bytes.`, 413);
+        action = restoring ? validateImportAction(JSON.parse(serialized)) : validateAction(JSON.parse(serialized));
         operationId = action.operationId ?? cryptoApi.randomUUID();
         const { operationId: ignoredId, ...normalizedPayload } = action; void ignoredId;
         payloadHash = await payloadDigest(cryptoApi, normalizedPayload);
@@ -205,7 +150,8 @@ export function createBrowserProgressRequest(dependencies: BrowserProgressDepend
         }
         if (action.revision !== current.revision) return json({ error: "Your progress changed in another tab. Refresh and retry your change.", code: "revision_conflict", ...progressResponse(current.state, current.revision) }, 409);
         const revision = current.revision + 1;
-        const state = applyAction(current.state, action, (dependencies.now?.() ?? new Date()).toISOString(), cryptoApi.randomUUID());
+        // A restore is merged with the record as it is now, inside this lock, at the revision its preview showed.
+        const state = action.action === "importRecord" ? restoredState(current.state, action.state, action.mode).state : applyAction(current.state, action, (dependencies.now?.() ?? new Date()).toISOString(), cryptoApi.randomUUID());
         // Reset preserves revision/receipt tombstones; delayed pre-reset saves cannot resurrect erased work.
         // It erases their payload hashes: anyone who can read this storage could recover deleted saves by hashing guesses.
         // Its own receipt keeps its hash, which only restates its revision, so every release can answer a retry of it.
