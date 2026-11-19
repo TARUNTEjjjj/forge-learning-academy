@@ -12,7 +12,7 @@ const missions = await import(missionsUrl);
 const gitSource = read("../app/components/GitLab.tsx").split("export default function GitLab")[0].replace(/^import .* from .*;$/gm, "");
 const { initialGitState, runGitCommand, gitChanges } = await import(moduleUrl(gitSource));
 const practiceSource = read("../app/components/Practice.tsx").split("export default function Practice")[0].replace(/^import pythonWorkerSource .*;$/gm, "").replace(/^import .* from "react";$/gm, "").replace(/^import .* from "lucide-react";$/gm, "").replace('"../../lib/missions"', JSON.stringify(missionsUrl));
-const { validateRunnerResult, resetPracticeStorage, practiceRecord, readStore, writeStore, disposeSandbox, passedCase } = await import(moduleUrl(practiceSource + "\nexport { readStore, writeStore, disposeSandbox, passedCase };"));
+const { validateRunnerResult, resetPracticeStorage, practiceRecord, restorePracticeRecord, readStore, writeStore, disposeSandbox, passedCase } = await import(moduleUrl(practiceSource + "\nexport { readStore, writeStore, disposeSandbox, passedCase };"));
 const step = (state, command) => runGitCommand(state, command).state;
 const firstCommit = () => step(step(initialGitState(), "git add ."), 'git commit -m "Add tracker"');
 const edit = (state, path, content) => ({ ...state, working: { ...state.working, [path]: content } });
@@ -564,5 +564,48 @@ test("the learning-record export includes the lab's drafts and completed mission
   } finally { globalThis.localStorage = oldStorage; globalThis.window = oldWindow; }
   // Forge needs React and a browser, so check only that the exported object carries the lab's record.
   const forge = read("../app/components/Forge.tsx").replace(/\s+/g, "");
-  assert.match(forge, /download\(['"]forge-progress\.json['"],JSON\.stringify\(\{[^}]*\bpracticeLab:practiceRecord\(userKey\)/, "Export my learning record must include the lab's drafts and completed missions");
+  assert.match(forge, /download\(['"]forge-progress\.json['"],learningRecordExport\(state,practiceRecord\(userKey\)\)\)/, "Export my learning record must include the lab's drafts and completed missions");
+});
+
+test("restoring the Python lab writes drafts first and, when storage refuses a write, puts back what it wrote and removes nothing", () => {
+  const oldStorage = globalThis.localStorage, oldWindow = globalThis.window;
+  const entries = new Map(); let refuse = null;
+  globalThis.localStorage = {
+    get length() { return entries.size; }, key(index) { return [...entries.keys()][index] ?? null; },
+    getItem(key) { return entries.get(key) ?? null; }, removeItem(key) { entries.delete(key); },
+    setItem(key, value) { if (refuse?.(key)) throw Object.assign(new Error("full"), { name: "QuotaExceededError" }); entries.set(key, value); },
+  };
+  globalThis.window = new EventTarget(); let notified = 0;
+  window.addEventListener("forge-lab-storage", () => notified++);
+  const [a, b, c] = missions.MISSIONS, prefix = "forge.lab.user.learner.";
+  try {
+    writeStore(`${prefix}code.${a.id}`, "mine"); writeStore(`${prefix}code.${b.id}`, "only here"); writeStore(`${prefix}completed`, JSON.stringify([b.id]));
+    // Storage refuses one draft: the draft already written is put back, nothing is removed and completed missions
+    // stay as they were, so the lab is exactly as before and the "kept" message is true.
+    refuse = key => key === `${prefix}code.${c.id}`;
+    const before = new Map(entries);
+    const failed = restorePracticeRecord("learner", { completed: [a.id], write: { [a.id]: "from file", [c.id]: "file only" }, remove: [b.id] });
+    assert.deepEqual(failed, { saved: false, failed: [c.id] });
+    assert.deepEqual(practiceRecord("learner"), { completed: [b.id], drafts: { [a.id]: "mine", [b.id]: "only here" } });
+    assert.deepEqual(entries, before, "a refused restore leaves lab storage byte-for-byte as it was");
+    // The completed list refused last: every draft written is undone, including one that did not exist before.
+    refuse = key => key === `${prefix}completed`;
+    assert.deepEqual(restorePracticeRecord("learner", { completed: [a.id], write: { [a.id]: "from file", [c.id]: "file only" }, remove: [b.id] }), { saved: false, failed: ["completed"] });
+    assert.deepEqual(entries, before);
+    assert.equal(readStore(`${prefix}code.${c.id}`, c.starter), c.starter, "a refused restore write is not kept in memory as if it were saved");
+    refuse = null;
+    assert.deepEqual(restorePracticeRecord("learner", { completed: [a.id], write: { [a.id]: "from file", [c.id]: "file only" }, remove: [b.id] }), { saved: true, failed: [] });
+    assert.deepEqual(practiceRecord("learner"), { completed: [a.id], drafts: { [a.id]: "from file", [c.id]: "file only" } });
+    // A restore also replaces a same-tab draft that storage had refused earlier.
+    refuse = () => true; writeStore(`${prefix}code.${b.id}`, "unsaved"); refuse = null;
+    assert.equal(readStore(`${prefix}code.${b.id}`, b.starter), "unsaved");
+    // A refused restore keeps that unsaved same-tab draft too.
+    refuse = key => key === `${prefix}completed`;
+    restorePracticeRecord("learner", { completed: [a.id], write: { [b.id]: "restored" }, remove: [] });
+    assert.equal(readStore(`${prefix}code.${b.id}`, b.starter), "unsaved");
+    refuse = null;
+    restorePracticeRecord("learner", { completed: [a.id], write: { [b.id]: "restored" }, remove: [] });
+    assert.equal(readStore(`${prefix}code.${b.id}`, b.starter), "restored");
+    assert.ok(notified >= 3, "open lab views re-read storage after a restore");
+  } finally { globalThis.localStorage = oldStorage; globalThis.window = oldWindow; }
 });

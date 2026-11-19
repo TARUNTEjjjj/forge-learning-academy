@@ -12,7 +12,8 @@ type Feedback = { results: CaseResult[]; error: string | null; output: string; s
 type Status = "idle" | "loading" | "running" | "done" | "error";
 
 /** Writes that storage refused, kept for this tab only, with the deletion epochs they were made under. */
-const memoryStore = new Map<string, { value: string; epochs: string | null }>();
+type MemoryEntry = { value: string; epochs: string | null };
+const memoryStore = new Map<string, MemoryEntry>();
 function subscribeStore(notify: () => void) {
   const otherTab = (event: StorageEvent) => { if (event.key) memoryStore.delete(event.key); else memoryStore.clear(); notify(); };
   window.addEventListener("storage", otherTab);
@@ -71,6 +72,38 @@ export function practiceRecord(userKey: string) {
     if (code !== mission.starter && code.length <= 30000) drafts[mission.id] = code;
   }
   return { completed: completedIds(readStore(`${storePrefix}completed`, "[]")), drafts };
+}
+/**
+ * Saves the Python lab part of a restored learning record (see practiceRestorePlan in lib/learning-record.ts).
+ * Drafts are written first. If storage refuses any write, the drafts already written are put back as they were,
+ * nothing is removed and the completed list is not changed, so a full or blocked storage never leaves the lab with
+ * part of the file and less than it had. Unlike an editor save, a refused write is not kept for this tab: the result
+ * reports it instead.
+ */
+export function restorePracticeRecord(userKey: string, plan: { completed: string[]; write: Record<string, string>; remove: string[] }) {
+  const storePrefix = `forge.lab.user.${encodeURIComponent(userKey)}.`;
+  const failed: string[] = [];
+  const written: { key: string; previous: string | null; kept: MemoryEntry | undefined }[] = [];
+  const put = (key: string, value: string) => {
+    try {
+      const previous = localStorage.getItem(key), kept = memoryStore.get(key);
+      localStorage.setItem(key, value); memoryStore.delete(key); written.push({ key, previous, kept }); return true;
+    } catch { return false; }
+  };
+  for (const [id, code] of Object.entries(plan.write)) if (!put(`${storePrefix}code.${id}`, code)) { failed.push(id); break; }
+  if (!failed.length && !put(`${storePrefix}completed`, JSON.stringify(plan.completed))) failed.push("completed");
+  if (failed.length) {
+    // Undo in reverse order. Putting back a value that was stored before needs no more room than it had.
+    for (const { key, previous, kept } of written.reverse()) {
+      try { if (previous === null) localStorage.removeItem(key); else localStorage.setItem(key, previous); } catch { /* reported as not saved */ }
+      if (kept) memoryStore.set(key, kept);
+    }
+  } else for (const id of plan.remove) {
+    const key = `${storePrefix}code.${id}`;
+    try { localStorage.removeItem(key); memoryStore.delete(key); } catch { failed.push(id); }
+  }
+  window.dispatchEvent(new Event("forge-lab-storage"));
+  return { saved: !failed.length, failed };
 }
 function completedIds(raw: string): string[] {
   try { const value: unknown = JSON.parse(raw); return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string" && MISSIONS.some(m => m.id === id)) : []; } catch { return []; }
