@@ -25,7 +25,11 @@ const missionsUrl = dataUrl(transpile(read("../lib/missions.ts")));
 const progressUrl = dataUrl(transpile(read("../lib/progress.ts")));
 const filesUrl = dataUrl(transpile(read("../lib/project-files.ts")));
 const draftsUrl = dataUrl(transpile(read("../lib/draft-store.ts")).replace('"./project-files"', JSON.stringify(filesUrl)));
-const Practice = (await component("../app/components/Practice.tsx", { "../../lib/python-worker.js?raw": dataUrl(`export default ${JSON.stringify(read("../lib/python-worker.js"))};`), "../../lib/missions": missionsUrl })).default;
+// The runtime loader is replaced by one the tests settle: globalThis.runtimeLoad decides what each load returns.
+globalThis.runtimeLoad = () => Promise.resolve({ "pyodide.mjs": new ArrayBuffer(1) });
+const runtimeUrl = dataUrl(`export const runtimeBase = href => new URL("/runtime/pyodide/314.0.1/", href).href;
+export const loadPythonRuntime = base => globalThis.runtimeLoad(base);`);
+const Practice = (await component("../app/components/Practice.tsx", { "../../lib/python-worker.js?raw": dataUrl(`export default ${JSON.stringify(read("../lib/python-worker.js"))};`), "../../lib/python-runtime": runtimeUrl, "../../lib/missions": missionsUrl })).default;
 const Projects = (await component("../app/components/Projects.tsx", { "../../lib/progress": progressUrl, "../../lib/project-files": filesUrl, "../../lib/draft-store": draftsUrl })).default;
 const [missions, progress, files, drafts] = await Promise.all([missionsUrl, progressUrl, filesUrl, draftsUrl].map(url => import(url)));
 
@@ -62,6 +66,12 @@ function fakeTimers() {
     restore() { Object.assign(globalThis, saved); },
   };
 }
+/** The sandbox's first message: its script is listening and can receive the runtime. */
+function sandboxLoaded(frame) {
+  window.dispatchEvent(Object.assign(new Event("message"), { source: frame.contentWindow, data: { nonce: frame.nonce, loaded: true } }));
+  React.flush();
+}
+const settle = () => new Promise(resolve => setImmediate(resolve));
 /** What the sandbox would forward from the Python worker. */
 function fromSandbox(frame, data) {
   window.dispatchEvent(Object.assign(new Event("message"), { source: frame.contentWindow, data: { nonce: frame.nonce, data } }));
@@ -182,6 +192,50 @@ test("the Projects editor shows the shared budget and keeps Save disabled when a
     show(seven, 0);
     assert.equal(view().budget, `Saved projects share ${progress.MAX_STATE_BYTES.toLocaleString()} bytes of browser storage with your practice history and notes. ${progress.savedBytes(seven).toLocaleString()} bytes are in use.`);
   } finally { React.unmount(); }
+});
+
+test("the app hands each sandbox the verified runtime only once it has loaded, and never to a stopped run", async () => {
+  // The opaque sandbox cannot reuse the HTTP cache, so the page passes it the bytes it verified; see lib/python-runtime.ts.
+  const timers = fakeTimers();
+  const pending = [];
+  globalThis.runtimeLoad = base => new Promise((resolve, reject) => pending.push({ base, resolve, reject }));
+  try {
+    const view = lab("runtime-handoff");
+    view.type(CORRECT);
+    const frame = view.check();
+    assert.equal(pending.length, 1, "the runtime load starts with the run");
+    assert.equal(pending[0].base, "https://forge.test/runtime/pyodide/314.0.1/");
+    sandboxLoaded(frame);
+    const files = { "pyodide.mjs": new ArrayBuffer(4) };
+    pending[0].resolve(files); await settle(); React.flush();
+    const sent = frame.posted.filter(message => message.type === "runtime");
+    assert.equal(sent.length, 1); assert.equal(sent[0].files, files); assert.equal(sent[0].nonce, frame.nonce);
+    fromSandbox(frame, { type: "ready" });
+    assert.equal(frame.posted.find(message => message.type === "run")?.payload.code, CORRECT);
+    fromSandbox(frame, { type: "result", payload: passing, output: "" });
+    assert.equal(view.results.at(-1).passed, progressMission.tests.length);
+
+    // Stop while the runtime is still arriving: that sandbox is told to stop and is never sent the runtime.
+    const stopped = view.check();
+    sandboxLoaded(stopped);
+    view.click("Stop");
+    pending[1].resolve(files); await settle(); React.flush();
+    assert.ok(stopped.posted.some(message => message.type === "stop"));
+    assert.ok(!stopped.posted.some(message => message.type === "runtime"));
+
+    // A runtime that cannot be fetched or verified is a load failure: the code stays, and no attempt is recorded.
+    const results = view.results.length;
+    const failing = view.check();
+    sandboxLoaded(failing);
+    pending[2].reject(new Error("pyodide.asm.wasm did not match the pinned Python 314.0.1 runtime, so it was not used."));
+    await settle(); React.flush();
+    assert.match(view.error(), /^Python could not load\..*did not match the pinned Python 314\.0\.1 runtime/);
+    assert.ok(failing.posted.some(message => message.type === "stop"), "the failed run's sandbox is removed");
+    assert.equal(view.editor(), CORRECT); assert.equal(view.results.length, results);
+  } finally {
+    React.unmount(); timers.restore();
+    globalThis.runtimeLoad = () => Promise.resolve({ "pyodide.mjs": new ArrayBuffer(1) });
+  }
 });
 
 test("Restore a learning record previews the file, switches between merge and replace, and restores at the previewed revision", async () => {

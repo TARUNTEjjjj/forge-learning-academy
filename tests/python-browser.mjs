@@ -7,10 +7,15 @@
  * BROWSER_EXECUTABLE=/absolute/path/to/chrome \
  * FORGE_BROWSER_REPORT=/absolute/path/to/report.json node tests/python-browser.mjs
  *
+ * FORGE_BROWSER=webkit runs the same checks in Playwright's WebKit (installed with
+ * `npx playwright-core install webkit`); BROWSER_EXECUTABLE then does not apply.
+ *
  * Optional FORGE_BLOCK_CDN=1 adds a separate external-CDN-blocked run. Routing
- * disables browser HTTP caching, so that context runs separately. No context is
- * runtime cache evidence: the opaque-origin sandbox bypasses the HTTP cache, so
- * Chrome downloads the runtime on every run.
+ * disables browser HTTP caching, so that context runs separately. The app page
+ * fetches and verifies the runtime, then hands the bytes to each opaque sandbox,
+ * so every run after the first in a loaded page must make no runtime request.
+ * Whether a reload is served from the HTTP cache is measured by
+ * tests/python-delivery.mjs, whose server counts what it actually sends.
  */
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
@@ -27,9 +32,11 @@ const moduleSpecifier = modulePath
   ? pathToFileURL(isAbsolute(modulePath) && /\.(?:mjs|js)$/.test(modulePath)
     ? modulePath : join(resolve(modulePath), 'index.mjs')).href
   : 'playwright-core';
-const { chromium } = await import(moduleSpecifier);
+const browserName = process.env.FORGE_BROWSER || 'chromium';
+assert(['chromium', 'webkit'].includes(browserName), 'FORGE_BROWSER must be chromium or webkit.');
+const browserType = (await import(moduleSpecifier))[browserName];
 const defaultChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const executablePath = process.env.BROWSER_EXECUTABLE
+const executablePath = browserName !== 'chromium' ? undefined : process.env.BROWSER_EXECUTABLE
   || (process.platform === 'darwin' && existsSync(defaultChrome) ? defaultChrome : undefined);
 const runtimePrefix = '/runtime/pyodide/314.0.1/';
 const runtimeFiles = new Set([
@@ -55,11 +62,11 @@ const checks = progressCases.length;
 // `incomplete` returns 0, so under the lab's pass rule it passes exactly the cases that expect 0.
 const incompletePassed = progressCases.filter(test => jsonEqual(0, test.expected)).length;
 const report = {
-  origin, runtimeVersion: '314.0.1', startedAt: new Date().toISOString(),
+  origin, browser: browserName, runtimeVersion: '314.0.1', startedAt: new Date().toISOString(),
   passed: false, runs: [], network: [], contexts: [], errors: [], console: [],
 };
 const responseTasks = [];
-const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+const browser = await browserType.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
 
 async function checkpoint() {
   await mkdir(dirname(reportPath), { recursive: true });
@@ -144,6 +151,7 @@ async function run(workspace, name, code, { passed = checks, message, category }
   await page.getByLabel(editorName).fill(code);
   const entry = { context: label, name, expectedPassed: passed, expectedMessage: message || null };
   report.runs.push(entry);
+  const requestsBefore = report.network.filter(request => request.context === label).length;
   const start = Date.now();
   await page.getByRole('button', { name: 'Check solution', exact: true }).click();
   await page.locator('.lab-feedback').waitFor({ timeout: 75_000 });
@@ -162,6 +170,9 @@ async function run(workspace, name, code, { passed = checks, message, category }
   assert.equal(await page.getByLabel(editorName).inputValue(), code, `${name}: code preserved`);
   entry.saved = { passed: latest.passed, total: latest.total, category: latest.category };
   entry.remainingIframes = await page.locator(frameSelector).count();
+  entry.runtimeRequests = report.network.filter(request => request.context === label).length - requestsBefore;
+  if (workspace.runtimeLoaded) assert.equal(entry.runtimeRequests, 0, `${name}: the page reuses its verified runtime`);
+  workspace.runtimeLoaded = true;
   entry.passed = true;
   await checkpoint();
   console.log(`PASS ${label}: ${name} (${entry.milliseconds}ms)`);
@@ -197,6 +208,7 @@ try {
   await run(repeated, 'write isolated builtins state', stateWriter);
   await run(repeated, 'fresh interpreter has no previous builtins state', stateReader);
   await repeated.page.reload({ waitUntil: 'domcontentloaded' });
+  repeated.runtimeLoaded = false;
   await repeated.page.getByLabel(editorName).waitFor();
   assert.equal(await repeated.page.getByLabel(editorName).inputValue(), stateReader, 'Draft survives reload.');
   await run(repeated, 'valid after reload', correct);

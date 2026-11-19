@@ -8,9 +8,12 @@ import test from "node:test";
 import { Worker } from "node:worker_threads";
 
 // Runs the production worker sources with the pinned Pyodide npm package in a Node worker thread.
-// The host plays the sandbox's part: it sends the run payload after "ready" and, like a browser
-// worker, turns an unhandled promise rejection into an "unhandledrejection" event on self.
+// The host plays the sandbox's part: it hands the worker the runtime files, sends the run payload
+// after "ready" and, like a browser worker, turns an unhandled promise rejection into an
+// "unhandledrejection" event on self. Node cannot import blob: URLs, so the host serves each module
+// blob from the runtime folder, and only when its bytes are exactly the file of that name.
 const runtime = dirname(createRequire(import.meta.url).resolve("pyodide/package.json")) + "/";
+const RUNTIME_FILES = JSON.parse(readFileSync(new URL("../scripts/python-runtime-manifest.json", import.meta.url), "utf8")).files.map(file => file.name);
 const WORKERS = {
   current: readFileSync(new URL("../lib/python-worker.js", import.meta.url), "utf8"),
   // The compatibility worker loads the same release from jsDelivr; runWorker swaps in a local copy.
@@ -18,6 +21,22 @@ const WORKERS = {
 };
 const HOST = `
 const { parentPort, workerData } = require("node:worker_threads");
+const { readFileSync } = require("node:fs");
+const { pathToFileURL } = require("node:url");
+const files = {};
+for (const name of workerData.files) {
+  try { const bytes = readFileSync(workerData.runtime + name); files[name] = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length); } catch {}
+}
+const blobs = new WeakMap();
+const NodeBlob = globalThis.Blob;
+globalThis.Blob = class extends NodeBlob {
+  constructor(parts, options) { super(parts, options); blobs.set(this, Buffer.concat(parts.map(part => Buffer.from(part)))); }
+};
+URL.createObjectURL = blob => {
+  const name = Object.keys(files).find(key => Buffer.from(files[key]).equals(blobs.get(blob)));
+  if (!name) throw new Error("The worker made a blob that is not a runtime file.");
+  return pathToFileURL(workerData.runtime + name).href;
+};
 const self = new EventTarget();
 self.postMessage = message => {
   parentPort.postMessage(message);
@@ -25,6 +44,7 @@ self.postMessage = message => {
 };
 process.on("unhandledRejection", reason => self.dispatchEvent(Object.assign(new Event("unhandledrejection", { cancelable: true }), { reason })));
 new Function("self", "runtimeBase", workerData.source)(self, workerData.runtime);
+self.onmessage({ data: { type: "runtime", files } });
 `;
 const progress = "def progress(completed, goal):\n    return 0 if goal <= 0 else max(0, min(100, completed * 100 // goal))\n";
 
@@ -32,7 +52,7 @@ const progress = "def progress(completed, goal):\n    return 0 if goal <= 0 else
 function runWorker(source, code, base = runtime) {
   return new Promise((resolve, reject) => {
     const payload = { type: "run", code, functionName: "progress", cases: [[1, 2], [0, 0]] };
-    const workerData = { source: source.replaceAll("https://cdn.jsdelivr.net/pyodide/v314.0.1/full/", base), runtime: base, payload };
+    const workerData = { source: source.replaceAll("https://cdn.jsdelivr.net/pyodide/v314.0.1/full/", base), runtime: base, payload, files: RUNTIME_FILES };
     const host = new Worker(HOST, { eval: true, stdout: true, stderr: true, workerData });
     const messages = []; let logs = "";
     for (const stream of [host.stdout, host.stderr]) stream.on("data", chunk => { logs += chunk; });
@@ -75,7 +95,8 @@ test("Python worker reports a fatal interpreter error at once instead of leaving
 });
 
 test("Python worker reports a runtime file that fails to load as a load failure, without waiting", { timeout: 120_000 }, async (t) => {
-  // Without pyodide.asm.wasm, loading never settles either; only an unhandled rejection reports it.
+  // Without pyodide.asm.wasm, the compatibility worker's loading never settles; only an unhandled rejection
+  // reports it. The current worker is handed the files and rejects a missing one before Pyodide starts.
   const broken = await mkdtemp(join(tmpdir(), "forge-broken-runtime-"));
   t.after(() => rm(broken, { recursive: true, force: true }));
   for (const name of ["pyodide.mjs", "pyodide.asm.mjs", "python_stdlib.zip", "pyodide-lock.json"]) await copyFile(runtime + name, join(broken, name));

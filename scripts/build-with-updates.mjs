@@ -9,7 +9,7 @@ const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const release=await readAppRelease(root,{project:'forge-learning-academy',sourcePaths:[
   'index.html','src','app','lib','resources','offline-resources-worker.js','vite.config.ts','package.json','package-lock.json',
   'public/privacy.html','public/favicon.svg','public/curriculum.json','public/curriculum-guide.html','public/local-workspace.json','public/_headers','public/python-worker.js',
-  'scripts/build-with-updates.mjs','scripts/stage-python-runtime.mjs','scripts/app-release.mjs','scripts/app-update-protocol.mjs','scripts/stage-resource-explorer.mjs',
+  'scripts/build-with-updates.mjs','scripts/stage-python-runtime.mjs','scripts/python-runtime-manifest.json','scripts/app-release.mjs','scripts/app-update-protocol.mjs','scripts/stage-resource-explorer.mjs',
 ],ignorePaths:['resources/README.md','resources/sources.json']});
 await stageResourceExplorer(root,resolve(root,'public/resources'),{release});
 await stageRootOfflineWorker(root,resolve(root,'public'),{release});

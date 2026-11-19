@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowRight, BookOpen, Check, CheckCircle2, ChevronDown, Clock3, Code2, Lightbulb, Loader2, Play, RotateCcw, Square, Terminal, XCircle } from "lucide-react";
 import pythonWorkerSource from "../../lib/python-worker.js?raw";
+import { loadPythonRuntime, runtimeBase as pythonRuntimeBase } from "../../lib/python-runtime";
 import { MISSIONS, isJsonValue, jsonEqual, type JsonValue, type Mission } from "../../lib/missions";
 
 export type PracticeResult = { missionId: string; passed: number; total: number; category: string };
@@ -120,17 +121,22 @@ export function validateRunnerResult(value: unknown, count: number): value is { 
 
 function safeScript(value: unknown) { return JSON.stringify(value).replace(/</g, "\\u003c"); }
 
-/** An opaque sandbox keeps learner code away from app cookies, storage, and authenticated APIs. */
-function sandboxDocument(source: string, nonce: string, runtimeBase: string) {
-  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' blob: ${runtimeBase}; worker-src blob:; connect-src ${runtimeBase};"></head><body><script>
+/**
+ * An opaque sandbox keeps learner code away from app cookies, storage, and authenticated APIs. It announces
+ * itself with `loaded`, then receives the verified runtime bytes from the app and passes them to a fresh worker.
+ * Its policy allows no network requests: the worker needs only the bytes it was given.
+ */
+function sandboxDocument(source: string, nonce: string) {
+  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' blob:; worker-src blob:; connect-src 'none';"></head><body><script>
 const nonce = ${safeScript(nonce)};
 window.addEventListener('securitypolicyviolation', event => parent.postMessage({nonce, data:{type:'error', message:'Python runtime asset was blocked by the browser policy: ' + event.violatedDirective + ' (' + event.blockedURI + ').'}}, '*'));
 const url = URL.createObjectURL(new Blob([${safeScript(source)}], {type:'text/javascript'}));
 let worker;
+let stopped = false;
 let readyForwarded = false;
 let resultForwarded = false;
-const stop = () => { worker?.terminate(); URL.revokeObjectURL(url); };
-try {
+const stop = () => { stopped = true; worker?.terminate(); URL.revokeObjectURL(url); };
+const start = files => {
   worker = new Worker(url);
   worker.onmessage = event => {
     const data = event.data;
@@ -139,11 +145,19 @@ try {
     else if (data.type === 'error' || (data.type === 'result' && readyForwarded)) { resultForwarded = true; stop(); parent.postMessage({nonce, data}, '*'); }
   };
   worker.onerror = event => parent.postMessage({nonce, data:{type:'error', message:'The Python environment could not start. Check your connection and browser support, then retry.' + (event.message ? ' ' + String(event.message).slice(0,300) : '')}}, '*');
+  const buffers = Object.values(files).filter(value => value instanceof ArrayBuffer);
+  worker.postMessage({type:'runtime', files}, buffers);
+};
+try {
   window.addEventListener('message', event => {
     if (event.source !== parent || event.data?.nonce !== nonce) return;
-    if (event.data.type === 'stop') { stop(); parent.postMessage({nonce, stopped:true}, '*'); }
-    if (event.data.type === 'run') worker.postMessage(event.data.payload);
+    try {
+      if (event.data.type === 'stop') { stop(); parent.postMessage({nonce, stopped:true}, '*'); }
+      if (event.data.type === 'runtime' && !worker && !stopped && event.data.files && typeof event.data.files === 'object') start(event.data.files);
+      if (event.data.type === 'run') worker?.postMessage(event.data.payload);
+    } catch(error) { parent.postMessage({nonce, data:{type:'error', message:String(error).slice(0,500)}}, '*'); }
   });
+  parent.postMessage({nonce, loaded:true}, '*');
 } catch(error) { parent.postMessage({nonce, data:{type:'error', message:String(error).slice(0,500)}}, '*'); }
 <\/script></body></html>`;
 }
@@ -251,13 +265,23 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
     };
     timer = setTimeout(() => fail("Python took too long to load. Check your connection, then retry. Your code is still here."), 60000);
     try {
-      const runtimeBase = new URL("/runtime/pyodide/314.0.1/", window.location.href).href;
+      const runtimeBase = pythonRuntimeBase(window.location.href);
       const source = `const runtimeBase = ${safeScript(runtimeBase)};\n${pythonWorkerSource}`;
+      // Verified bytes from the app's own origin, reused for this page; see lib/python-runtime.ts.
+      const runtime = loadPythonRuntime(runtimeBase);
+      runtime.catch(() => undefined);
       if (serial !== runSerial.current || settled) return;
       frame = document.createElement("iframe");
       frame.setAttribute("sandbox", "allow-scripts"); frame.setAttribute("aria-hidden", "true"); frame.setAttribute("title", "Isolated Python execution"); frame.style.display = "none";
       listener = (event: MessageEvent) => {
         if (serial !== runSerial.current || settled || event.source !== frame?.contentWindow || event.data?.nonce !== nonce) return;
+        if (event.data.loaded === true) {
+          const target = frame.contentWindow;
+          runtime.then(files => {
+            if (serial === runSerial.current && !settled && target === frame?.contentWindow) target?.postMessage({ type: "runtime", nonce, files }, "*");
+          }, (error: unknown) => fail("Python could not load. Check your connection, then try again. Your code is still here. " + String(error instanceof Error ? error.message : error).slice(0, 300)));
+          return;
+        }
         const data = event.data.data;
         if (!data || typeof data !== "object") return;
         // The worker sends what the program printed with its result, and also with an error that stopped it.
@@ -292,7 +316,7 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
         }
       };
       window.addEventListener("message", listener);
-      frame.srcdoc = sandboxDocument(source, nonce, runtimeBase);
+      frame.srcdoc = sandboxDocument(source, nonce);
       document.body.appendChild(frame);
     } catch (error) { fail(error instanceof Error ? error.message : "The Python environment could not start. Please retry."); }
   }
@@ -332,7 +356,7 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
           {resetOpen && <div className="lab-reset-confirm"><span>Replace this mission’s code with its starter?</span><button onClick={resetCode}>Reset</button><button onClick={() => setResetOpen(false)}>Keep my code</button></div>}
         </div>
         <div className="lab-actions"><div><button className="lab-secondary" onClick={() => void run(true)} aria-disabled={busy}><Play size={15} /> Run examples</button><button className="lab-primary" onClick={() => void run(false)} aria-disabled={busy}>{busy ? <Loader2 size={16} className="lab-spin" /> : <CheckCircle2 size={16} />}{status === "loading" ? "Loading Python…" : status === "running" ? "Checking…" : "Check solution"}</button>{busy && <button className="lab-stop" onClick={cancel}><Square size={13} /> Stop</button>}</div><button className="lab-text-button" onClick={() => setHintCount(value => Math.min(value + 1, mission.hints.length))} disabled={hintCount >= mission.hints.length}><Lightbulb size={16} /> {hintCount === 0 ? "A small nudge" : hintCount < mission.hints.length ? "Another nudge" : "All hints shown"}</button></div>
-        {busy && <p className="lab-runtime-message" role="status">{status === "loading" ? "Preparing an isolated Python workspace. Each run may download the Python runtime (about 6 MB) again, so this can take up to a minute." : "Running your function against the selected cases. This run stops automatically after 8 seconds."}</p>}
+        {busy && <p className="lab-runtime-message" role="status">{status === "loading" ? "Preparing an isolated Python workspace. The first run after this page opens downloads and checks the Python runtime (about 6 MB), so it can take up to a minute; later runs on this page reuse it." : "Running your function against the selected cases. This run stops automatically after 8 seconds."}</p>}
         {hintCount > 0 && <div className="lab-hints">{mission.hints.slice(0, hintCount).map((hint, index) => <p key={hint}><span>{index + 1}</span>{hint}</p>)}</div>}
         {feedback && <section className="lab-feedback" aria-live="polite" aria-label="Code feedback">
           <div className="lab-feedback-title"><Terminal size={17} /><strong>{feedback.error ? "Let’s adjust one thing" : `${passed} / ${shownTests.length} ${feedback.sample ? "examples" : "checks"} passed`}</strong>{allPassed && <span className="lab-pass-badge"><Check size={13} /> Mission complete</span>}</div>
@@ -347,7 +371,7 @@ function PracticeWorkspace({ onResult, initialMission, userKey = "anonymous" }: 
           {feedback.output && <details className="lab-output"><summary>Console output</summary><pre>{feedback.output}</pre></details>}
         </section>}
         <div className="lab-resource"><a href={mission.resource.url} target="_blank" rel="noopener noreferrer"><BookOpen size={15} /> {mission.resource.label} <ArrowRight size={13} /></a><span>Original exercises · practice feedback, not a certified grade</span></div>
-        <p className="lab-privacy">Code runs in your browser in an isolated worker; a fresh workspace is created for every run. Drafts and completed missions are saved on this device and included when you export your learning record. Runs need an internet connection, because each one may download the Python runtime again. Test checks verify outputs; complexity requirements need your own reasoning.</p>
+        <p className="lab-privacy">Code runs in your browser in an isolated worker; a fresh workspace is created for every run. Drafts and completed missions are saved on this device and included when you export your learning record. The first run after you open or reload this page needs an internet connection unless your browser kept a copy of the Python runtime; later runs on the page reuse the copy it checked. Test checks verify outputs; complexity requirements need your own reasoning.</p>
         {storageNotice && <p className="lab-storage-notice" role="status">Browser storage is unavailable. You can keep practicing, but copy your code before closing this page.</p>}
       </section>
     </div>

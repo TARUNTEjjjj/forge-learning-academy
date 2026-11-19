@@ -95,7 +95,9 @@ and driven through their own handlers. The Python runtime is unchanged upstream 
 hosting and startup path changed. See [runtime provenance](docs/python-runtime.md).
 
 The real-browser regression uses an installed Playwright Core and Chrome. Serve
-the built app with Pages headers (or use a Cloudflare preview), then run:
+the built app with Pages headers (for example
+`FORGE_SERVE_ONLY=1 FORGE_PORT=4173 node tests/python-delivery.mjs`, or use a
+Cloudflare preview), then run:
 
 ```sh
 FORGE_ORIGIN=http://127.0.0.1:4173 \
@@ -112,9 +114,18 @@ blocks jsDelivr to verify that the current app has no runtime dependency on it.
 The runner checks saved scores, preserved drafts, sandbox cleanup and complete
 runtime responses; it never substitutes a fake interpreter. Routing is disabled
 for the main repeat tests, because Playwright routing disables HTTP caching.
-Repeated runs are still not cache evidence: requests from the opaque-origin
-sandbox bypass the HTTP cache, so Chrome downloads the runtime on every run.
+It also requires that runs after the first on a loaded page make no runtime
+request. `FORGE_BROWSER=webkit` runs the same checks in Playwright's WebKit.
 Run against a preview before publishing production.
+
+Successful repeated runs are not download evidence on their own.
+`tests/python-delivery.mjs` counts the runtime requests and bytes its server
+actually sends for cold, repeated, reloaded and new-context runs. The app page
+now verifies the runtime once per page and hands it to each opaque sandbox, so
+repeated runs on an open page download nothing in Chrome or WebKit; Chrome
+also reused its HTTP cache after a reload. The measured before/after results
+and remaining browser limits are in
+[runtime delivery](docs/python-runtime.md#runtime-delivery).
 
 `public/python-worker.js` remains as a compatibility endpoint for tabs opened
 before this update, whose embedded policy still permits only the former CDN.
@@ -133,7 +144,7 @@ on real execution, saved results, recovery and isolation.
 
 Pull requests and pushes to `main` run type checking, the Node regression suite, curriculum examples, and a production build in GitHub Actions. Same-tab progress saves are serialized: a practice result waits for an ongoing save and uses the resulting revision. Cross-tab conflicts still require review and retry rather than silently overwriting changes.
 
-Runtime compatibility note: the pinned Pyodide runtime documents module workers, but module blob workers currently fail in the reviewed WebKit opaque-origin sandbox. The existing isolated dynamic-import bootstrap remains in place and passed real Python execution during the 3 November 2026 review. Replacing it requires cross-browser verification without granting `allow-same-origin`; do not weaken that boundary as a workaround.
+Runtime compatibility note: the pinned Pyodide runtime documents module workers, but module blob workers currently fail in the reviewed WebKit opaque-origin sandbox. The existing isolated dynamic-import bootstrap remains in place; it now imports the verified runtime modules from blob URLs and passed real Python execution in Chrome 157 and Playwright WebKit 26.0 on 19 November 2026. Replacing it requires cross-browser verification without granting `allow-same-origin`; do not weaken that boundary as a workaround.
 
 ## GitHub resource collection
 
