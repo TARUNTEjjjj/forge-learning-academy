@@ -50,8 +50,10 @@ Now the app page, which is not opaque, fetches the five runtime files from its
 own origin without credentials, where the immutable caching rule applies
 ([`lib/python-runtime.ts`](../lib/python-runtime.ts)). Before anything runs, it
 checks each file's byte length and SHA-256 digest against the committed
-manifest and refuses a file that differs; a failed load is retried in full on
-the next run. The page keeps the verified bytes in memory (about 13.5 MB,
+manifest and refuses a file that differs, stopping as soon as a file is larger
+than the pinned one. A failed load, or a download that receives no bytes for
+20 seconds, is abandoned (the other files are cancelled) and retried in full on
+the next run, so a stalled connection cannot leave every later run waiting. The page keeps the verified bytes in memory (about 13.5 MB,
 uncompressed) until it is closed or reloaded and posts a copy into each new
 sandbox. The sandbox hands that copy to a fresh worker, which imports the
 modules from blob URLs and answers Pyodide's own requests for runtime files
@@ -148,7 +150,9 @@ closure, replace the manifest with independently checked hashes, update the
 runtime version in the runner and headers, and rerun real browser execution
 and isolation checks. The worker passes Pyodide's `createPyodideModule`
 option so that `pyodide.asm.mjs` is not imported over the network; confirm
-the new release still honors it, or the sandbox policy will block the import. Never silently regenerate the expected hashes from
+the new release still honors it, or the sandbox policy will block the import.
+`tests/python-runtime-delivery.test.mjs` checks this in the pinned
+`pyodide.mjs` and fails on an upgrade that drops it. Never silently regenerate the expected hashes from
 whatever package is installed.
 
 References: [official deployment guide](https://pyodide.org/en/314.0.1/usage/downloading-and-deploying.html),
