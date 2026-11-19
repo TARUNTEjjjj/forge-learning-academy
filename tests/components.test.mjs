@@ -183,3 +183,45 @@ test("the Projects editor shows the shared budget and keeps Save disabled when a
     assert.equal(view().budget, `Saved projects share ${progress.MAX_STATE_BYTES.toLocaleString()} bytes of browser storage with your practice history and notes. ${progress.savedBytes(seven).toLocaleString()} bytes are in use.`);
   } finally { React.unmount(); }
 });
+
+test("Restore a learning record previews the file, switches between merge and replace, and restores at the previewed revision", async () => {
+  const recordUrl = dataUrl(transpile(read("../lib/learning-record.ts").replace('"./progress"', JSON.stringify(progressUrl))));
+  const RestoreRecord = (await component("../app/components/RestoreRecord.tsx", { "../../lib/missions": missionsUrl, "../../lib/learning-record": recordUrl })).default;
+  const record = await import(recordUrl);
+  const [mission] = missions.MISSIONS;
+  const current = { ...progress.emptyState(), profile: { name: "Here", weeklyHours: 10, language: "python" }, sessions: [{ id: "5b1f7a3e-1d2c-4a8b-9c0d-1e2f3a4b5c6d", minutes: 30, note: "Only here", createdAt: "2026-11-01T00:00:00.000Z" }] };
+  const fromFile = { ...progress.emptyState(), sessions: [{ id: "6c2f7a3e-1d2c-4a8b-9c0d-1e2f3a4b5c6d", minutes: 20, note: "From file", createdAt: "2026-10-01T00:00:00.000Z" }] };
+  const restores = [];
+  let exported = 0;
+  React.render(React.jsx(RestoreRecord, { state: current, revision: 7, signed: true, practiceLab: () => ({ completed: [], drafts: {} }), onRestore: async (...args) => { restores.push(args); return true; }, onExportCurrent: () => exported++ }));
+  const input = () => React.findAll(node => node.type === "input" && node.props.type === "file")[0];
+  const choose = async (name, content, size) => {
+    const bytes = new TextEncoder().encode(content);
+    input().props.onChange({ currentTarget: { value: name, files: [{ name, size: size ?? bytes.byteLength, arrayBuffer: async () => bytes.buffer }] } });
+    await new Promise(resolve => setImmediate(resolve)); React.flush();
+  };
+  const alerts = () => React.findAll(node => node.props.role === "alert").map(React.text);
+  const button = label => React.findAll(node => node.type === "button" && React.text(node).trim() === label)[0];
+  // A damaged file and an oversized one are refused with a message; nothing is offered to restore.
+  await choose("broken.json", '{"format":"forge-learning-record",');
+  assert.match(alerts()[0], /broken\.json: .*not complete JSON.*Nothing was changed/); assert.equal(button("Merge this record"), undefined);
+  await choose("huge.json", "{}", record.MAX_RECORD_FILE_BYTES + 1);
+  assert.match(alerts()[0], /larger than 5 MB/);
+  // A valid file shows its contents and what merge would change.
+  await choose("forge-progress.json", record.learningRecordExport(fromFile, { completed: [mission.id], drafts: { [mission.id]: "print(1)" } }, new Date("2026-11-18T00:00:00.000Z")));
+  assert.deepEqual(alerts(), []);
+  const preview = () => React.text(React.findAll(node => node.props["aria-label"] === "Restore preview")[0]);
+  assert.match(preview(), /learning record format 1/); assert.match(preview(), /1 practice session, 0 projects, 0 practice results, 1 Python draft and 1 completed mission/);
+  assert.match(preview(), /Profile: your current profile is kept/); assert.match(preview(), /Practice sessions: 1 added\./); assert.match(preview(), /Python lab: 1 drafts written/);
+  assert.doesNotMatch(preview(), /removes work/);
+  // Replace says what it removes and offers a backup first.
+  React.findAll(node => node.type === "input" && node.props.value === "replace")[0].props.onChange(); React.flush();
+  assert.match(preview(), /Practice sessions: 1 added, 1 removed/); assert.match(preview(), /Profile: taken from the file/); assert.match(preview(), /Replace removes work that is only in this browser/);
+  button("Download current record first").props.onClick(); assert.equal(exported, 1);
+  button("Replace with this record").props.onClick(); await new Promise(resolve => setImmediate(resolve)); React.flush();
+  assert.equal(restores.length, 1); assert.equal(restores[0][1], "replace"); assert.equal(restores[0][2], 7, "the restore is applied at the revision the preview showed");
+  assert.deepEqual(restores[0][0].state, fromFile);
+  assert.match(React.text(React.findAll(node => node.props.role === "status")[0]), /The record was restored/);
+  assert.equal(React.findAll(node => node.props["aria-label"] === "Restore preview").length, 0);
+  React.unmount();
+});

@@ -72,6 +72,29 @@ export function practiceRecord(userKey: string) {
   }
   return { completed: completedIds(readStore(`${storePrefix}completed`, "[]")), drafts };
 }
+/**
+ * Saves the Python lab part of a restored learning record (see practiceRestorePlan in lib/learning-record.ts).
+ * Drafts are written first. A refused write leaves that mission's current draft in place, and then nothing is
+ * removed and the completed list is not changed, so a full or blocked storage never leaves the lab with less than it
+ * had. Unlike an editor save, a refused write is not kept for this tab: the result reports it instead.
+ */
+export function restorePracticeRecord(userKey: string, plan: { completed: string[]; write: Record<string, string>; remove: string[] }) {
+  const storePrefix = `forge.lab.user.${encodeURIComponent(userKey)}.`;
+  const failed: string[] = [];
+  const put = (key: string, value: string) => {
+    try { localStorage.setItem(key, value); memoryStore.delete(key); return true; } catch { return false; }
+  };
+  for (const [id, code] of Object.entries(plan.write)) if (!put(`${storePrefix}code.${id}`, code)) failed.push(id);
+  if (!failed.length) {
+    if (!put(`${storePrefix}completed`, JSON.stringify(plan.completed))) failed.push("completed");
+    else for (const id of plan.remove) {
+      const key = `${storePrefix}code.${id}`;
+      try { localStorage.removeItem(key); memoryStore.delete(key); } catch { failed.push(id); }
+    }
+  }
+  window.dispatchEvent(new Event("forge-lab-storage"));
+  return { saved: !failed.length, failed };
+}
 function completedIds(raw: string): string[] {
   try { const value: unknown = JSON.parse(raw); return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string" && MISSIONS.some(m => m.id === id)) : []; } catch { return []; }
 }

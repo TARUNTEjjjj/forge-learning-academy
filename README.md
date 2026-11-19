@@ -27,8 +27,17 @@ Python imports and other references yourself after a rename.
 Open the live URL in Chrome. Start with Learning path → Chapter 1. Your progress
 is saved for that website address in the current browser. Use My progress to
 export your learning record, which includes your Python lab drafts, and download
-project ZIPs before changing devices or clearing browser data. These downloads
-are copies to keep; this edition cannot load them back in. The previous
+project ZIPs before changing devices or clearing browser data. In another
+browser, or after clearing data, use **Restore a learning record** in My
+progress to load that export back. Forge checks the whole file and previews the
+change first; **Merge** keeps everything already in the browser, while
+**Replace** makes the browser match the file. A record restores your profile,
+module notes, practice sessions and results, saved projects (with their files),
+Python lab drafts and completed missions. Project ZIPs cannot be loaded back in,
+and project edits never saved in the browser, the optional CI starter, the Git
+playground and resource-library caches are not part of a record. Restoring
+writes only to the current browser; it is not cloud sync. The format and its
+rules are in [docs/learning-record.md](docs/learning-record.md). The previous
 localhost record is separate.
 
 Python downloads its pinned runtime from this website. C++ and official contest

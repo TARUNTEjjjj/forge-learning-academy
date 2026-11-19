@@ -9,7 +9,8 @@ const url = source => `data:text/javascript;base64,${Buffer.from(ts.transpileMod
 const progressUrl = url(read("../lib/progress.ts"));
 const progress = await import(progressUrl);
 const { createSerialTaskQueue } = await import(url(read("../lib/serial-task-queue.ts")));
-const { createBrowserProgressRequest, browserProgressRequest, BROWSER_PROGRESS_KEY, BROWSER_RECEIPT_LIMIT } = await import(url(read("../lib/browser-progress.ts").replace('"./progress"', JSON.stringify(progressUrl))));
+const recordUrl = url(read("../lib/learning-record.ts").replace('"./progress"', JSON.stringify(progressUrl)));
+const { createBrowserProgressRequest, browserProgressRequest, BROWSER_PROGRESS_KEY, BROWSER_RECEIPT_LIMIT } = await import(url(read("../lib/browser-progress.ts").replace('"./progress"', JSON.stringify(progressUrl)).replace('"./learning-record"', JSON.stringify(recordUrl))));
 
 class Storage {
   values = new Map(); writes = 0; readError = null; writeError = null; silentWrites = false; afterWriteReadError = false;
