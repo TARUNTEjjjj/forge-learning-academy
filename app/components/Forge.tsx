@@ -33,6 +33,7 @@ export default function Forge({userKey,accountEmail=null}:{userKey:string;accoun
  const revisionRef=useRef(0),saveQueue=useRef(createSerialTaskQueue());
  const mutationRef=useRef(performMutation);mutationRef.current=performMutation;
  const pendingSave=useRef<{key:string;revision:number;operationId:string}|null>(null);
+ const lastSaveError=useRef('');
  const lessonRef=useDialogFocus(Boolean(lesson),()=>setLesson(null));
  const usedBytes=useMemo(()=>savedBytes(state),[state]),reservedBytes=useMemo(()=>practiceHistoryReserve(state.attempts),[state]);
  useEffect(()=>{const target=window as Window & {appUpdateCanReload?:()=>boolean};target.appUpdateCanReload=()=>view==='overview'&&signed&&!busy&&!lesson&&!settings&&!focus&&elapsed===0&&!showMenu&&!accountChanged&&!pendingSave.current;return()=>{target.appUpdateCanReload=()=>false}},[view,signed,busy,lesson,settings,focus,elapsed,showMenu,accountChanged]);
@@ -55,7 +56,7 @@ export default function Forge({userKey,accountEmail=null}:{userKey:string;accoun
  function mutate(fields:Record<string,unknown>){return saveQueue.current(()=>mutationRef.current(fields))}
  async function performMutation(fields:Record<string,unknown>){
   if(accountLocked.current)return false;
-  if(!signed){setNotice('Browser storage is unavailable. You can explore lessons and download project files. Enable site storage to save progress.');return false}
+  if(!signed){lastSaveError.current='Browser storage is unavailable. You can explore lessons and download project files. Enable site storage to save progress.';setNotice(lastSaveError.current);return false}
   const key=JSON.stringify(fields);const pending=pendingSave.current?.key===key?pendingSave.current:{key,revision:revisionRef.current,operationId:crypto.randomUUID()};pendingSave.current=pending;
   setBusy(true);
   try{
@@ -67,7 +68,7 @@ export default function Forge({userKey,accountEmail=null}:{userKey:string;accoun
    if(r.status===409){pendingSave.current=null;await refresh();throw Error('Progress changed in another tab. Your data has been refreshed; please try again.')}
    if(!r.ok){if(r.status<500&&r.status!==429)pendingSave.current=null;throw Error(r.status===429?'Please wait '+(r.headers.get('Retry-After')||'60')+' seconds before saving again.':(typeof d.error==='string'?d.error:d.error?.message)||'Unable to confirm the save. Retry the same change to check safely.')}
    pendingSave.current=null;setState(d.state);revisionRef.current=d.revision;setRecommendation(d.recommendation);setConnection('Saved in this browser');return true;
-  }catch(e){if(!accountLocked.current)setNotice(e instanceof Error&&['TimeoutError','AbortError'].includes(e.name)?'The save timed out. Your draft is preserved. Retry the same change to check its outcome safely.':e instanceof Error?e.message:'Unable to confirm the save. Retry the same change to check safely.');return false}
+  }catch(e){lastSaveError.current=e instanceof Error&&['TimeoutError','AbortError'].includes(e.name)?'The save timed out. Your draft is preserved. Retry the same change to check its outcome safely.':e instanceof Error?e.message:'Unable to confirm the save. Retry the same change to check safely.';if(!accountLocked.current)setNotice(lastSaveError.current);return false}
   finally{setBusy(false)}
  }
 
@@ -82,12 +83,15 @@ export default function Forge({userKey,accountEmail=null}:{userKey:string;accoun
  const download=(name:string,content:string,type='application/json')=>{const url=URL.createObjectURL(new Blob([content],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
  const exportRecord=()=>download('forge-progress.json',learningRecordExport(state,practiceRecord(userKey)));
  // A restore waits for earlier saves, applies only at the revision its preview showed, then writes the Python lab.
+ // The outcome is returned as well as shown in the notice: the panel keeps it on screen after the notice fades.
  const restoreRecord=(record:LearningRecord,mode:ImportMode,previewRevision:number)=>saveQueue.current(async()=>{
-  if(previewRevision!==revisionRef.current){setNotice('Your progress changed while you reviewed this file. Check the updated preview, then restore again.');return false}
-  if(!await mutationRef.current({action:'importRecord',mode,state:record.state}))return false;
+  if(previewRevision!==revisionRef.current){const message='Your progress changed while you reviewed this file. Check the updated preview, then restore again.';setNotice(message);return {restored:false,labSaved:false,message}}
+  lastSaveError.current='';
+  if(!await mutationRef.current({action:'importRecord',mode,state:record.state}))return {restored:false,labSaved:false,message:lastSaveError.current||'This record was not restored.'};
   const lab=restorePracticeRecord(userKey,practiceRestorePlan(practiceRecord(userKey),record.practiceLab,mode));
-  setNotice(lab.saved?'Your learning record was restored in this browser.':'Your learning record was restored, but this browser refused to save some Python lab changes, so your existing lab drafts and completed missions were kept. Free browser storage, then restore the same file again with the same choice.');
-  return true;
+  const message=lab.saved?'Your learning record was restored in this browser.':'Your learning record was restored, but this browser refused to save the Python lab changes, so your lab drafts and completed missions were left as they were. Free browser storage, then restore the same file again with the same choice.';
+  setNotice(message);
+  return {restored:true,labSaved:lab.saved,message};
  });
  return <div className="app-shell">
  <a className="skip-link" href="#main">Skip to main content</a>

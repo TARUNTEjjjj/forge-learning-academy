@@ -115,6 +115,9 @@ test("damaged, partial, foreign, newer and oversized files are refused before an
   refuse({ ...good, practiceLab: { completed: [], drafts: { retired: "x" } } }, /not a Python lab mission/, "a draft for an unknown mission");
   refuse({ ...good, practiceLab: { completed: [], drafts: { [first.id]: "x".repeat(30_001) } } }, /at most 30,000 characters/, "a draft the lab would not show");
   refuse({ ...good, practiceLab: { completed: [], drafts: {}, extra: 1 } }, /practiceLab is not valid/, "extra lab fields");
+  // Deeply nested JSON inside an otherwise valid section is refused as unreadable, not with a stack-overflow message.
+  const nested = text.replace('"weeklyHours"', `"deep":${"[".repeat(200_000)}${"]".repeat(200_000)},"weeklyHours"`);
+  refuse(nested, /record is not valid|profile is not valid/, "deeply nested JSON");
   refuse({ ...good, projects: Array.from({ length: 8 }, (_, index) => ({ ...good.projects[0], id: `p${index}`, files: Array.from({ length: 6 }, (_, file) => ({ path: file ? `f${file}.py` : "main.py", content: file ? "x".repeat(39_000) : good.projects[0].code })) })) }, /larger than the 1,500,000 bytes/, "a record too large to save");
 });
 
@@ -191,7 +194,7 @@ test("merge keeps this browser's work, adds the file's, and keeps the newer copy
   assert.deepEqual(state.sessions.map(s => s.note), ["From file", "Graphs"], "sessions are joined by ID in time order");
   assert.deepEqual(state.projects.map(p => p.title), ["Study tracker", "Second"]);
   assert.equal(state.attempts.length, 2, "the file's results are added; this browser's are kept");
-  assert.deepEqual(summary, { mode: "merge", profile: "kept", modules: { added: 1, updated: 0, removed: 0 }, sessions: { added: 1, removed: 0 }, projects: { added: 1, updated: 0, removed: 0, keptNewer: 1 }, attempts: { added: 1, removed: 0, trimmed: 0 }, result: { modules: 2, sessions: 2, projects: 2, attempts: 2, bytes: progress.savedBytes(state) } });
+  assert.deepEqual(summary, { mode: "merge", profile: "kept", modules: { added: 1, updated: 0, removed: 0 }, sessions: { added: 1, removed: 0 }, projects: { added: 1, updated: 0, removed: 0, keptNewer: 1 }, attempts: { added: 1, removed: 0, trimmed: 0 }, overwritten: { modules: [], projects: [], fileAhead: false }, result: { modules: 2, sessions: 2, projects: 2, attempts: 2, bytes: progress.savedBytes(state) } });
   // A newer copy in the file wins; the file's profile is used only while this browser's is untouched.
   theirs.projects[0].updatedAt = later;
   assert.equal(record.restoredState(mine, theirs, "merge").state.projects[0].title, "Older title");
@@ -202,6 +205,25 @@ test("merge keeps this browser's work, adds the file's, and keeps the newer copy
   assert.deepEqual([replaced.summary.modules.removed, replaced.summary.sessions.removed, replaced.summary.projects.removed, replaced.summary.attempts.removed], [1, 1, 1, 1]);
   assert.equal(record.restoredState(mine, mine, "merge").summary.result.attempts, 1, "merging a record into itself changes nothing");
   assert.deepEqual(record.restoredState(mine, mine, "merge").state, mine);
+});
+
+test("the preview names this browser's copies that a restore overwrites, and flags a file dated ahead of this device's clock", async () => {
+  const mine = (await filledBrowser()).state;
+  const now = Date.parse("2026-11-19T12:00:00.000Z");
+  // The other device's clock ran two hours ahead: its older edit carries a later date than this browser's newer one.
+  const skewed = structuredClone(mine);
+  skewed.modules["python-basics"] = { complete: true, evidence: "Older note from the other device", updatedAt: "2026-11-19T13:30:00.000Z" };
+  skewed.projects[0] = { ...skewed.projects[0], description: "Older description", updatedAt: "2026-11-19T13:30:00.000Z" };
+  const merged = record.restoredState(mine, skewed, "merge", now);
+  assert.equal(merged.state.projects[0].description, "Older description", "merge still keeps the later-dated copy");
+  assert.deepEqual(merged.summary.overwritten, { modules: ["python-basics"], projects: ["Study tracker"], fileAhead: true });
+  // Without skew the same overwrite is named, but not flagged.
+  assert.deepEqual(record.restoredState(mine, skewed, "merge", Date.parse("2026-11-20T00:00:00.000Z")).summary.overwritten, { modules: ["python-basics"], projects: ["Study tracker"], fileAhead: false });
+  // Copies kept because this browser's is newer are not overwritten; replace names what it overwrites too.
+  const older = structuredClone(skewed); older.modules["python-basics"].updatedAt = older.projects[0].updatedAt = "2020-01-01T00:00:00.000Z";
+  assert.deepEqual(record.restoredState(mine, older, "merge", now).summary.overwritten, { modules: [], projects: [], fileAhead: false });
+  assert.deepEqual(record.restoredState(mine, older, "replace", now).summary.overwritten, { modules: ["python-basics"], projects: ["Study tracker"], fileAhead: false });
+  assert.deepEqual(record.restoredState(mine, mine, "replace", now).summary.overwritten, { modules: [], projects: [], fileAhead: false });
 });
 
 test("merge stays within the saved-record limits: practice results keep the latest 500 and other overflows are refused", () => {

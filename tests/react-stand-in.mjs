@@ -12,6 +12,8 @@ export const jsxs = jsx;
 let instances = new Map(), current = null, hookIndex = 0, dirty = false, effects = [], root = null;
 /** The rendered host tree: { type, props, children } nodes and strings. */
 export let tree = null;
+/** Props of each host element focused through an object ref, in order. */
+export const focused = [];
 
 function hook(create) {
   if (!current) throw new Error("A hook was called outside a component render.");
@@ -61,7 +63,8 @@ function renderNode(node) {
     return renderNode(output);
   }
   const { children, ref, ...props } = node.props;
-  if (ref && typeof ref === "object" && !ref.current) ref.current = { focus() {}, scrollTop: 0 };
+  // An object ref gets a stand-in element whose focus() is recorded in `focused`, with the props it was rendered with.
+  if (ref && typeof ref === "object" && !ref.current) ref.current = { focus() { focused.push(props); }, scrollTop: 0 };
   return { type: node.type, props, children: renderNode(children) };
 }
 

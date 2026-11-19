@@ -567,7 +567,7 @@ test("the learning-record export includes the lab's drafts and completed mission
   assert.match(forge, /download\(['"]forge-progress\.json['"],learningRecordExport\(state,practiceRecord\(userKey\)\)\)/, "Export my learning record must include the lab's drafts and completed missions");
 });
 
-test("restoring the Python lab writes drafts first and removes nothing when storage refuses a write", () => {
+test("restoring the Python lab writes drafts first and, when storage refuses a write, puts back what it wrote and removes nothing", () => {
   const oldStorage = globalThis.localStorage, oldWindow = globalThis.window;
   const entries = new Map(); let refuse = null;
   globalThis.localStorage = {
@@ -580,11 +580,18 @@ test("restoring the Python lab writes drafts first and removes nothing when stor
   const [a, b, c] = missions.MISSIONS, prefix = "forge.lab.user.learner.";
   try {
     writeStore(`${prefix}code.${a.id}`, "mine"); writeStore(`${prefix}code.${b.id}`, "only here"); writeStore(`${prefix}completed`, JSON.stringify([b.id]));
-    // Storage refuses one draft: the other is written, but nothing is removed and completed missions stay as they were.
+    // Storage refuses one draft: the draft already written is put back, nothing is removed and completed missions
+    // stay as they were, so the lab is exactly as before and the "kept" message is true.
     refuse = key => key === `${prefix}code.${c.id}`;
+    const before = new Map(entries);
     const failed = restorePracticeRecord("learner", { completed: [a.id], write: { [a.id]: "from file", [c.id]: "file only" }, remove: [b.id] });
     assert.deepEqual(failed, { saved: false, failed: [c.id] });
-    assert.deepEqual(practiceRecord("learner"), { completed: [b.id], drafts: { [a.id]: "from file", [b.id]: "only here" } });
+    assert.deepEqual(practiceRecord("learner"), { completed: [b.id], drafts: { [a.id]: "mine", [b.id]: "only here" } });
+    assert.deepEqual(entries, before, "a refused restore leaves lab storage byte-for-byte as it was");
+    // The completed list refused last: every draft written is undone, including one that did not exist before.
+    refuse = key => key === `${prefix}completed`;
+    assert.deepEqual(restorePracticeRecord("learner", { completed: [a.id], write: { [a.id]: "from file", [c.id]: "file only" }, remove: [b.id] }), { saved: false, failed: ["completed"] });
+    assert.deepEqual(entries, before);
     assert.equal(readStore(`${prefix}code.${c.id}`, c.starter), c.starter, "a refused restore write is not kept in memory as if it were saved");
     refuse = null;
     assert.deepEqual(restorePracticeRecord("learner", { completed: [a.id], write: { [a.id]: "from file", [c.id]: "file only" }, remove: [b.id] }), { saved: true, failed: [] });
@@ -592,6 +599,11 @@ test("restoring the Python lab writes drafts first and removes nothing when stor
     // A restore also replaces a same-tab draft that storage had refused earlier.
     refuse = () => true; writeStore(`${prefix}code.${b.id}`, "unsaved"); refuse = null;
     assert.equal(readStore(`${prefix}code.${b.id}`, b.starter), "unsaved");
+    // A refused restore keeps that unsaved same-tab draft too.
+    refuse = key => key === `${prefix}completed`;
+    restorePracticeRecord("learner", { completed: [a.id], write: { [b.id]: "restored" }, remove: [] });
+    assert.equal(readStore(`${prefix}code.${b.id}`, b.starter), "unsaved");
+    refuse = null;
     restorePracticeRecord("learner", { completed: [a.id], write: { [b.id]: "restored" }, remove: [] });
     assert.equal(readStore(`${prefix}code.${b.id}`, b.starter), "restored");
     assert.ok(notified >= 3, "open lab views re-read storage after a restore");

@@ -192,8 +192,10 @@ test("Restore a learning record previews the file, switches between merge and re
   const current = { ...progress.emptyState(), profile: { name: "Here", weeklyHours: 10, language: "python" }, sessions: [{ id: "5b1f7a3e-1d2c-4a8b-9c0d-1e2f3a4b5c6d", minutes: 30, note: "Only here", createdAt: "2026-11-01T00:00:00.000Z" }] };
   const fromFile = { ...progress.emptyState(), sessions: [{ id: "6c2f7a3e-1d2c-4a8b-9c0d-1e2f3a4b5c6d", minutes: 20, note: "From file", createdAt: "2026-10-01T00:00:00.000Z" }] };
   const restores = [];
-  let exported = 0;
-  React.render(React.jsx(RestoreRecord, { state: current, revision: 7, signed: true, practiceLab: () => ({ completed: [], drafts: {} }), onRestore: async (...args) => { restores.push(args); return true; }, onExportCurrent: () => exported++ }));
+  let exported = 0, outcome = { restored: true, labSaved: true, message: "Your learning record was restored in this browser." };
+  React.render(React.jsx(RestoreRecord, { state: current, revision: 7, signed: true, practiceLab: () => ({ completed: [], drafts: {} }), onRestore: async (...args) => { restores.push(args); return outcome; }, onExportCurrent: () => exported++ }));
+  // Focus follows the flow; the stand-in records which element was focused.
+  const focusedName = () => { const props = React.focused.at(-1); return props?.type === "file" ? "file" : props?.["aria-label"] === "Restore preview" ? "preview" : undefined; };
   const input = () => React.findAll(node => node.type === "input" && node.props.type === "file")[0];
   const choose = async (name, content, size) => {
     const bytes = new TextEncoder().encode(content);
@@ -207,8 +209,10 @@ test("Restore a learning record previews the file, switches between merge and re
   assert.match(alerts()[0], /broken\.json: .*not complete JSON.*Nothing was changed/); assert.equal(button("Merge this record"), undefined);
   await choose("huge.json", "{}", record.MAX_RECORD_FILE_BYTES + 1);
   assert.match(alerts()[0], /larger than 5 MB/);
-  // A valid file shows its contents and what merge would change.
-  await choose("forge-progress.json", record.learningRecordExport(fromFile, { completed: [mission.id], drafts: { [mission.id]: "print(1)" } }, new Date("2026-11-18T00:00:00.000Z")));
+  // A valid file shows its contents and what merge would change, and focus moves to the preview.
+  const file = record.learningRecordExport(fromFile, { completed: [mission.id], drafts: { [mission.id]: "print(1)" } }, new Date("2026-11-18T00:00:00.000Z"));
+  await choose("forge-progress.json", file); React.flush();
+  assert.equal(focusedName(), "preview");
   assert.deepEqual(alerts(), []);
   const preview = () => React.text(React.findAll(node => node.props["aria-label"] === "Restore preview")[0]);
   assert.match(preview(), /learning record format 1/); assert.match(preview(), /1 practice session, 0 projects, 0 practice results, 1 Python draft and 1 completed mission/);
@@ -216,12 +220,47 @@ test("Restore a learning record previews the file, switches between merge and re
   assert.doesNotMatch(preview(), /removes work/);
   // Replace says what it removes and offers a backup first.
   React.findAll(node => node.type === "input" && node.props.value === "replace")[0].props.onChange(); React.flush();
-  assert.match(preview(), /Practice sessions: 1 added, 1 removed/); assert.match(preview(), /Profile: taken from the file/); assert.match(preview(), /Replace removes work that is only in this browser/);
+  assert.match(preview(), /Practice sessions: 1 added, 1 removed/); assert.match(preview(), /Profile: taken from the file/); assert.match(preview(), /Replace removes or overwrites work that is only in this browser/);
   button("Download current record first").props.onClick(); assert.equal(exported, 1);
   button("Replace with this record").props.onClick(); await new Promise(resolve => setImmediate(resolve)); React.flush();
   assert.equal(restores.length, 1); assert.equal(restores[0][1], "replace"); assert.equal(restores[0][2], 7, "the restore is applied at the revision the preview showed");
   assert.deepEqual(restores[0][0].state, fromFile);
   assert.match(React.text(React.findAll(node => node.props.role === "status")[0]), /The record was restored/);
   assert.equal(React.findAll(node => node.props["aria-label"] === "Restore preview").length, 0);
+  assert.equal(focusedName(), "file", "focus returns to the file field instead of being lost with the preview");
+  // A refused restore keeps the preview and says why in the panel; the app's notice fades after a few seconds.
+  outcome = { restored: false, labSaved: false, message: "Your progress changed while you reviewed this file. Check the updated preview, then restore again." };
+  await choose("forge-progress.json", file);
+  React.findAll(node => node.type === "input" && node.props.value === "merge")[0].props.onChange(); React.flush();
+  button("Merge this record").props.onClick(); await new Promise(resolve => setImmediate(resolve)); React.flush();
+  assert.match(alerts()[0], /This record was not restored: Your progress changed while you reviewed this file/);
+  assert.equal(React.findAll(node => node.props["aria-label"] === "Restore preview").length, 1);
+  // A record saved without its Python lab changes is not reported as a plain success.
+  outcome = { restored: true, labSaved: false, message: "Your learning record was restored, but this browser refused to save the Python lab changes." };
+  button("Merge this record").props.onClick(); await new Promise(resolve => setImmediate(resolve)); React.flush();
+  assert.match(alerts()[0], /refused to save the Python lab changes/);
+  assert.equal(React.findAll(node => node.props.role === "status" && /The record was restored/.test(React.text(node))).length, 0);
+  React.unmount();
+});
+
+test("Restore a learning record warns before a merge overwrites this browser's copy, naming it and a file dated ahead of this clock", async () => {
+  const recordUrl = dataUrl(transpile(read("../lib/learning-record.ts").replace('"./progress"', JSON.stringify(progressUrl))));
+  const RestoreRecord = (await component("../app/components/RestoreRecord.tsx", { "../../lib/missions": missionsUrl, "../../lib/learning-record": recordUrl })).default;
+  const record = await import(recordUrl);
+  const project = { id: "tracker", title: "Study tracker", description: "Newer here", code: "", repoUrl: "", status: "draft", updatedAt: "2026-11-01T00:00:00.000Z" };
+  const current = { ...progress.emptyState(), projects: [project] };
+  // The exporting device's clock was far ahead: its copy carries a date after this device's clock.
+  const fromFile = { ...progress.emptyState(), projects: [{ ...project, description: "Older, from a fast clock", updatedAt: "2099-01-01T00:00:00.000Z" }] };
+  React.render(React.jsx(RestoreRecord, { state: current, revision: 1, signed: true, practiceLab: () => ({ completed: [], drafts: {} }), onRestore: async () => ({ restored: true, labSaved: true, message: "" }), onExportCurrent: () => {} }));
+  const bytes = new TextEncoder().encode(record.learningRecordExport(fromFile, { completed: [], drafts: {} }));
+  React.findAll(node => node.type === "input" && node.props.type === "file")[0].props.onChange({ currentTarget: { value: "f.json", files: [{ name: "f.json", size: bytes.byteLength, arrayBuffer: async () => bytes.buffer }] } });
+  await new Promise(resolve => setImmediate(resolve)); React.flush();
+  const preview = React.text(React.findAll(node => node.props["aria-label"] === "Restore preview")[0]);
+  assert.match(preview, /Projects: 0 added, 1 updated/);
+  assert.match(preview, /Merge overwrites some work in this browser\. Download your current record first/);
+  assert.match(preview, /replaces this browser's 1 project \(Study tracker\), because the file's copy is dated later/);
+  assert.match(preview, /dated later than this device's clock/);
+  const confirm = React.findAll(node => node.type === "button" && /Merge this record/.test(React.text(node)))[0];
+  assert.equal(confirm.props["aria-describedby"], "restore-warning", "the confirm button is described by the warning");
   React.unmount();
 });

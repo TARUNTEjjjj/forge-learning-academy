@@ -153,8 +153,14 @@ export function parseLearningRecord(bytes: Uint8Array, missions: readonly Missio
   if (extra) importFailure(`"${extra.slice(0, 40)}"`, "This field is not part of a learning record.");
   if (typeof data.exportedAt !== "string" || !STAMP.test(data.exportedAt) || !Number.isFinite(Date.parse(data.exportedAt))) importFailure("exportedAt", "The export date is missing or malformed.");
   if (formatVersion === 1 && !("practiceLab" in data)) importFailure("practiceLab", "This section is missing.");
-  const state = validateLearnerState(Object.fromEntries(STATE_KEYS.filter(key => key in data).map(key => [key, data[key]])), importFailure);
-  return { formatVersion, exportedAt: data.exportedAt as string, state, practiceLab: "practiceLab" in data ? practiceLab(data.practiceLab, missions) : null };
+  try {
+    const state = validateLearnerState(Object.fromEntries(STATE_KEYS.filter(key => key in data).map(key => [key, data[key]])), importFailure);
+    return { formatVersion, exportedAt: data.exportedAt as string, state, practiceLab: "practiceLab" in data ? practiceLab(data.practiceLab, missions) : null };
+  } catch (error) {
+    // Deeply nested JSON can exhaust the stack while it is compared; report it as an unreadable record.
+    if (error instanceof ProgressError) throw error;
+    return importFailure("record", "It could not be read.");
+  }
 }
 
 /** The file "Export my learning record" downloads. */
@@ -186,6 +192,12 @@ export type ImportSummary = {
   sessions: { added: number; removed: number };
   projects: { added: number; updated: number; removed: number; keptNewer: number };
   attempts: { added: number; removed: number; trimmed: number };
+  /**
+   * This browser's module notes and projects that the file's copy replaces (module IDs and project titles), and
+   * whether any of those file copies is dated after this device's clock. Merge picks the later `updatedAt`, so a
+   * device whose clock runs ahead wins even when its copy is older; the preview names them and asks for a backup.
+   */
+  overwritten: { modules: string[]; projects: string[]; fileAhead: boolean };
   result: { modules: number; sessions: number; projects: number; attempts: number; bytes: number };
 };
 
@@ -195,16 +207,20 @@ export type ImportSummary = {
  * sessions and practice results are joined by ID, and the profile comes from the file only while this browser's is
  * untouched. Throws, before any write, when the result would exceed a limit rather than dropping work.
  */
-export function restoredState(current: LearnerState, imported: LearnerState, mode: ImportMode): { state: LearnerState; summary: ImportSummary } {
+export function restoredState(current: LearnerState, imported: LearnerState, mode: ImportMode, now = Date.now()): { state: LearnerState; summary: ImportSummary } {
   const currentModules = Object.keys(current.modules), importedModules = Object.keys(imported.modules);
   const currentProjects = new Map(current.projects.map(project => [project.id, project]));
   const importedProjects = new Map(imported.projects.map(project => [project.id, project]));
   const currentSessions = new Set(current.sessions.map(session => session.id)), importedSessions = new Set(imported.sessions.map(session => session.id));
   const currentAttempts = new Set(current.attempts.map(attempt => attempt.id)), importedAttempts = new Set(imported.attempts.map(attempt => attempt.id));
-  let state: LearnerState, summary: Omit<ImportSummary, "result">;
+  let state: LearnerState, summary: Omit<ImportSummary, "result" | "overwritten">;
+  const overwrittenModules: string[] = [], overwrittenProjects: { title: string; updatedAt: string }[] = [];
   if (mode === "replace") {
     state = structuredClone(imported);
-    const changedProjects = imported.projects.filter(project => currentProjects.has(project.id) && canonical(project) !== canonical(currentProjects.get(project.id))).length;
+    const changed = imported.projects.filter(project => currentProjects.has(project.id) && canonical(project) !== canonical(currentProjects.get(project.id)));
+    const changedProjects = changed.length;
+    for (const id of importedModules) if (id in current.modules && canonical(current.modules[id]) !== canonical(imported.modules[id])) overwrittenModules.push(id);
+    for (const project of changed) overwrittenProjects.push({ title: currentProjects.get(project.id)!.title, updatedAt: project.updatedAt });
     summary = {
       mode, profile: "from-file",
       modules: { added: importedModules.filter(id => !(id in current.modules)).length, updated: importedModules.filter(id => id in current.modules && canonical(current.modules[id]) !== canonical(imported.modules[id])).length, removed: currentModules.filter(id => !(id in imported.modules)).length },
@@ -220,7 +236,7 @@ export function restoredState(current: LearnerState, imported: LearnerState, mod
     for (const id of importedModules) {
       const mine = current.modules[id], theirs = imported.modules[id];
       if (!mine) { state.modules[id] = { ...theirs }; moduleAdded++; }
-      else if (newer(mine.updatedAt, theirs.updatedAt) && canonical(mine) !== canonical(theirs)) { state.modules[id] = { ...theirs }; moduleUpdated++; }
+      else if (newer(mine.updatedAt, theirs.updatedAt) && canonical(mine) !== canonical(theirs)) { state.modules[id] = { ...theirs }; moduleUpdated++; overwrittenModules.push(id); }
     }
     if (Object.keys(state.modules).length > 200) throw new ProgressError(`Merging would keep ${Object.keys(state.modules).length} modules; Forge keeps at most 200. Choose replace instead, or nothing will be changed.`, 413, "learning_record_too_large");
     const newSessions = imported.sessions.filter(session => !currentSessions.has(session.id));
@@ -231,7 +247,7 @@ export function restoredState(current: LearnerState, imported: LearnerState, mod
       const index = state.projects.findIndex(item => item.id === project.id);
       if (index < 0) { state.projects.push(structuredClone(project)); projectAdded++; }
       else if (canonical(state.projects[index]) !== canonical(project)) {
-        if (newer(state.projects[index].updatedAt, project.updatedAt)) { state.projects[index] = structuredClone(project); projectUpdated++; } else keptNewer++;
+        if (newer(state.projects[index].updatedAt, project.updatedAt)) { overwrittenProjects.push({ title: state.projects[index].title, updatedAt: project.updatedAt }); state.projects[index] = structuredClone(project); projectUpdated++; } else keptNewer++;
       }
     }
     if (state.projects.length > 20) throw new ProgressError(`Merging would keep ${state.projects.length} projects; Forge keeps at most 20. Choose replace instead, or nothing will be changed.`, 413, "learning_record_too_large");
@@ -248,7 +264,9 @@ export function restoredState(current: LearnerState, imported: LearnerState, mod
   }
   const bytes = savedBytes(state);
   if (bytes > MAX_STATE_BYTES) throw new ProgressError(`The restored record would need ${bytes.toLocaleString("en-US")} bytes; a browser workspace saves at most ${MAX_STATE_BYTES.toLocaleString("en-US")}. Choose replace, or remove large projects first. Nothing was changed.`, 413, "learning_record_too_large");
-  return { state, summary: { ...summary, result: { modules: Object.keys(state.modules).length, sessions: state.sessions.length, projects: state.projects.length, attempts: state.attempts.length, bytes } } };
+  const fileAhead = [...overwrittenModules.map(id => imported.modules[id].updatedAt), ...overwrittenProjects.map(project => project.updatedAt)].some(stamp => Date.parse(stamp) > now);
+  const overwritten = { modules: overwrittenModules, projects: overwrittenProjects.map(project => project.title), fileAhead };
+  return { state, summary: { ...summary, overwritten, result: { modules: Object.keys(state.modules).length, sessions: state.sessions.length, projects: state.projects.length, attempts: state.attempts.length, bytes } } };
 }
 
 export type PracticeRestorePlan = { completed: string[]; write: Record<string, string>; remove: string[]; keptCurrent: string[] };

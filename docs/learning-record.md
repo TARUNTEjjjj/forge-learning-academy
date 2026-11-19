@@ -72,6 +72,14 @@ confirm. Nothing is removed silently.
   does; the preview says how many older results that drops. A merge that would
   exceed 20 projects, 200 modules, 5,000 sessions or the record size is refused,
   and the preview suggests replace.
+
+  "Later" means the date the saving device's clock gave. When devices' clocks
+  disagree, an older edit can carry the later date. So whenever a restore
+  overwrites this browser's copy of a module note or project, or drops older
+  practice results, the preview names what it overwrites and asks you to
+  download your current record first. It also says when any of those file
+  copies is dated later than this device's clock, which usually means the
+  exporting device's clock was ahead.
 - **Replace** makes this browser match the file. Anything here that is not in
   the file is removed, including Python drafts the file does not have. The
   preview offers **Download current record first**.
@@ -87,7 +95,9 @@ the same operation ID is answered from its receipt instead of being applied
 twice. Full, blocked or unconfirmed storage leaves the saved record as it was.
 
 The Python lab is stored separately, so it is written after the record is
-saved. Drafts are written first; if the browser refuses any of them, nothing in
-the lab is removed and completed missions are not changed, and Forge says so.
+saved. Drafts are written first; if the browser refuses any write, the drafts
+already written are put back as they were, nothing in the lab is removed and
+completed missions are not changed, and the restore panel says so until you
+choose another file.
 Restoring the same file again with the same choice, after freeing storage,
 completes it.
