@@ -11,7 +11,7 @@ const missionsUrl = moduleUrl(read("../lib/missions.ts"));
 const missions = await import(missionsUrl);
 const gitSource = read("../app/components/GitLab.tsx").split("export default function GitLab")[0].replace(/^import .* from .*;$/gm, "");
 const { initialGitState, runGitCommand, gitChanges } = await import(moduleUrl(gitSource));
-const practiceSource = read("../app/components/Practice.tsx").split("export default function Practice")[0].replace(/^import pythonWorkerSource .*;$/gm, "").replace(/^import .* from "react";$/gm, "").replace(/^import .* from "lucide-react";$/gm, "").replace('"../../lib/missions"', JSON.stringify(missionsUrl));
+const practiceSource = read("../app/components/Practice.tsx").split("export default function Practice")[0].replace(/^import pythonWorkerSource .*;$/gm, "").replace(/^import .* from "\.\.\/\.\.\/lib\/python-runtime";$/gm, "").replace(/^import .* from "react";$/gm, "").replace(/^import .* from "lucide-react";$/gm, "").replace('"../../lib/missions"', JSON.stringify(missionsUrl));
 const { validateRunnerResult, resetPracticeStorage, practiceRecord, readStore, writeStore, disposeSandbox, passedCase } = await import(moduleUrl(practiceSource + "\nexport { readStore, writeStore, disposeSandbox, passedCase };"));
 const step = (state, command) => runGitCommand(state, command).state;
 const firstCommit = () => step(step(initialGitState(), "git add ."), 'git commit -m "Add tracker"');
@@ -409,8 +409,12 @@ test("runner keeps expected answers outside worker and isolates app origin", () 
   assert.match(ui, /cases: tests.map\(test => test.args\)/); assert.match(ui, /60000/); assert.match(ui, /8000/);
   assert.match(ui, /if \(started\) return/); assert.match(ui, /if \(!started\) return/);
   assert.match(ui, /python-worker\.js\?raw/);
-  assert.match(ui, /runtime\/pyodide\/314\.0\.1\//);
-  assert.match(worker, /import\(runtimeBase \+ "pyodide\.mjs"\)/);
+  assert.match(read("../lib/python-runtime.ts"), /`\/runtime\/pyodide\/\$\{RUNTIME_VERSION\}\/`/);
+  assert.equal(JSON.parse(read("../scripts/python-runtime-manifest.json")).version, "314.0.1");
+  assert.match(ui, /loadPythonRuntime\(runtimeBase\)/);
+  // The worker imports only the verified bytes it was handed, and the sandbox policy allows no requests.
+  assert.match(worker, /import\(moduleUrl\("pyodide\.mjs"\)\)/); assert.match(worker, /createPyodideModule/);
+  assert.match(ui, /connect-src 'none'/); assert.ok(!/script-src[^;"]*\$\{runtimeBase\}/.test(ui));
   assert.ok(!ui.includes("cdn.jsdelivr.net") && !worker.includes("cdn.jsdelivr.net"));
 });
 
@@ -425,14 +429,15 @@ test("the lab keeps runs of spaces in examples and case details, where a case's 
   }
 });
 
-test("runtime copy does not promise a cached download that the opaque sandbox cannot reuse", () => {
-  // Requests from the allow-scripts-only sandbox come from an opaque origin, so Chrome never serves
-  // the runtime from its HTTP cache: every run downloads it again and needs a connection.
+test("runtime copy describes reuse within a page and the browser cache, not offline use", () => {
+  // The page verifies and keeps the runtime it fetched from its own origin and hands it to each sandbox,
+  // so repeated runs do not download it again. A first run, a cleared cache or a new browser still needs a connection.
   assert.match(read("../app/components/Practice.tsx"), /setAttribute\("sandbox", "allow-scripts"\)/);
   const claim = (path, pattern) => read(path).match(pattern)?.[0];
-  assert.equal(claim("../app/components/Practice.tsx", /[^."]*first[- ]run[^."]*/gi), undefined);
-  assert.equal(claim("../public/privacy.html", /[^.>]*cache[^.]*for later runs/gi), undefined);
-  assert.equal(claim("../docs/python-runtime.md", /[^.]*first load[^.]*/gi), undefined);
+  for (const path of ["../app/components/Practice.tsx", "../public/privacy.html", "../docs/python-runtime.md", "../README.md"]) {
+    assert.equal(claim(path, /[^."]*(?:download|downloads) (?:the Python runtime|those public runtime files|the runtime) again for (?:each|every) run[^."]*/gi), undefined, path);
+    assert.equal(claim(path, /[^."]*works offline[^."]*/gi), undefined, path);
+  }
 });
 
 test("runner waits for matching worker termination before removing its sandbox, with bounded fallback", () => {
