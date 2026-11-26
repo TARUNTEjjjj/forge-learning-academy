@@ -318,3 +318,151 @@ pre { font-size: 12px; color: #dbe5f6; background: #0b1323; border: 1px solid #3
   .filter-tabs button { min-height: 36px; }
   footer { font-size: 9px; }
 }
+
+/* 3D Archipelago stage, GPU view transitions, tilt cards, and progress rings */
+@keyframes viewStageEnter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.view-stage {
+  animation: viewStageEnter .28s cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.world-wrap canvas {
+  touch-action: none;
+}
+
+.world-wrap canvas:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: -3px;
+}
+
+.island-label {
+  backdrop-filter: blur(8px);
+  transition: transform .18s cubic-bezier(.22, 1, .36, 1), background-color .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+
+.island-label:hover {
+  transform: translate(-50%, -2px);
+  border-color: #8294bd;
+  box-shadow: 0 6px 16px #00000055;
+}
+
+.island-label.completed:not(.current) {
+  background: #132c2beb;
+  color: #b4f5e1;
+  border-color: #5ee0b8;
+}
+
+.island-label.current {
+  box-shadow: 0 8px 24px #ff647838, 0 0 0 1px #ffb0bc55;
+}
+
+.map-controls {
+  padding: 5px 8px;
+  border-radius: 10px;
+  background: #0d1426cc;
+  border: 1px solid #303d5c;
+  backdrop-filter: blur(10px);
+}
+
+.map-controls button[aria-pressed='true'] {
+  background: #332032;
+  border-color: #ff8ea0;
+  color: #ffd8df;
+}
+
+.map-controls button:disabled {
+  opacity: .72;
+}
+
+.map-card,
+.stats-row .stat,
+.panel,
+.phase-detail,
+.mentor-card {
+  box-shadow: inset 0 1px 0 #ffffff0d, 0 14px 36px #00000024;
+}
+
+.tilt-card {
+  position: relative;
+  overflow: hidden;
+  transform-style: preserve-3d;
+  transition: transform .22s cubic-bezier(.22, 1, .36, 1), border-color .22s ease, box-shadow .22s ease;
+}
+
+.tilt-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(240px circle at var(--mx, 50%) var(--my, 50%), #ffffff1a, transparent 66%);
+  transition: opacity .22s ease;
+}
+
+@media (hover: hover) {
+  .tilt-card:hover {
+    transform: perspective(900px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) translateY(-3px);
+    border-color: #54668c;
+    box-shadow: inset 0 1px 0 #ffffff1a, 0 16px 38px #00000038;
+  }
+
+  .tilt-card:hover::before {
+    opacity: 1;
+  }
+
+  .next-card.tilt-card::before {
+    background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 50%), #ff647822, transparent 68%);
+  }
+}
+
+.progress-track i {
+  transition: width .55s cubic-bezier(.22, 1, .36, 1);
+  background: linear-gradient(90deg, #ff6478, #a99bff);
+}
+
+.progress-ring-track {
+  stroke: #2c3650;
+}
+
+.progress-ring-fill {
+  stroke: var(--accent);
+}
+
+.progress-ring-text {
+  fill: var(--paper);
+}
+
+.sidebar-expedition .progress-ring-fill {
+  stroke: #76ead0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view-stage {
+    animation: none !important;
+  }
+
+  .tilt-card,
+  .tilt-card:hover,
+  .island-label,
+  .island-label:hover,
+  .compass-needle,
+  .progress-ring-fill,
+  .progress-track i {
+    transform: none !important;
+    transition: none !important;
+  }
+
+  .tilt-card::before {
+    display: none;
+  }
+}
+
