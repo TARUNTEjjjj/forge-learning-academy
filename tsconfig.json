@@ -4,5 +4,5 @@
     "moduleResolution":"Bundler", "jsx":"react-jsx", "strict":true, "skipLibCheck":true,
     "noEmit":true, "allowImportingTsExtensions":true, "esModuleInterop":true
   },
-  "include":["src/**/*.tsx","app/components/**/*.tsx","lib/browser-progress.ts","vite.config.ts"]
+  "include":["src/**/*.tsx","app/components/**/*.tsx","lib/browser-progress.ts","lib/world3d.ts","vite.config.ts"]
 }
